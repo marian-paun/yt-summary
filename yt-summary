@@ -79,7 +79,7 @@ load_env_file
 : "${TELEGRAM_CHAT_ID:=}"
 : "${TELEGRAM_API_URL:=https://api.telegram.org}"
 : "${SEND_TELEGRAM:=false}"
-: "${TMP_BASE:=/temp/yt-summary}"
+TMP_BASE=$(mktemp -d -p /temp/ yt-summary-XXXX)
 : "${EXTERNAL_TRACKING_FILE:=/data/ltr/yt-dlp/files}"
 
 FORCE=false
@@ -777,7 +777,7 @@ split_transcript() {
     local target_chunk_words="$2"
     local video_id="$3"
     
-    local chunks_dir="${TMP_BASE:-/temp/yt-summary}/chunks_${video_id}_$$"
+    local chunks_dir="${TMP_BASE}/chunks_${video_id}_$$"
     mkdir -p "$chunks_dir"
     
     log_debug "Splitting transcript file: $transcript_file (target: $target_chunk_words words per chunk)"
@@ -930,7 +930,7 @@ summarize_video() {
     chunk_count=$(ls -1 "${chunks_dir}"/chunk_*.txt 2>/dev/null | wc -l)
     log_info "Created $chunk_count chunks"
     
-    local mapped_chunks_file="${TMP_BASE:-/temp/yt-summary}/mapped_${video_id}_$$.txt"
+    local mapped_chunks_file="${TMP_BASE}/mapped_${video_id}_$$.txt"
     echo -n "" > "$mapped_chunks_file"
     
     local i=1
@@ -1220,7 +1220,7 @@ cleanup_temp() {
         if [[ "$VERBOSE" == "true" ]] || [[ "$TRANSCRIPT_VERBOSE" == "true" ]]; then
             log_info "Cleaning up temporary files..."
         fi
-        rm -rf "${TMP_BASE:-/temp/yt-summary}"
+        rm -rf "$TMP_BASE"
         if [[ "$VERBOSE" == "true" ]] || [[ "$TRANSCRIPT_VERBOSE" == "true" ]]; then
             log_info "Temporary files cleaned."
         fi

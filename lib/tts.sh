@@ -315,7 +315,7 @@ generate_audio_piper() {
     esac
 
     local config_path="${voice_path%.onnx}.onnx.json"
-    local temp_dir="/tmp/yt-summary/tts_$$"
+    local temp_dir=$(mktemp -d -p /temp/ yt-summary-tts-XXXXXX)
     mkdir -p "$temp_dir"
 
     local input_file="${temp_dir}/input.txt"
@@ -377,7 +377,7 @@ generate_audio_edge_tts() {
     esac
 
     # Create temporary file for text input
-    local temp_dir="/tmp/yt-summary/edge-tts_$$"
+    local temp_dir=$(mktemp -d -p /temp/ yt-summary-edge-tts-XXXXXX)
     mkdir -p "$temp_dir"
     local input_file="${temp_dir}/input.txt"
     echo "$text" > "$input_file"

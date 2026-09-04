@@ -12,7 +12,7 @@ set -euo pipefail
 : "${LITELLM_MODEL:=}"
 : "${LITELLM_API_KEY:=}"
 
-STATS_FILE="${STATS_FILE:-${TMP_BASE:-/temp/yt-summary}/session_stats_$$.json}"
+STATS_FILE="${STATS_FILE:-$(mktemp -p /temp/ yt-summary-stats-XXXXXX).json}"
 STATS_LOCK="${STATS_FILE}.lock"
 
 _init_stats() {
@@ -278,7 +278,7 @@ ollama_chat() {
     
     # Use temporary file to avoid argument list too long errors
     local tmp_json
-    tmp_json=$(mktemp /tmp/yt-summary_request_XXXXXX.json)
+    tmp_json=$(mktemp /temp/yt-summary_request_XXXXXX.json)
     
     jq -n \
         --arg model "$model_name" \

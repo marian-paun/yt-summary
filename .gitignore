@@ -2,3 +2,4 @@ summary/*
 .env
 .env.*
 !.env.example
+.opencode
