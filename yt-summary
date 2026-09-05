@@ -1224,6 +1224,7 @@ cleanup_temp() {
         rm -rf "${TRANSCRIPT_TMP:-}"
         rm -rf "${METADATA_TMP:-}"
         rm -rf "$STATS_FILE"
+        rm -f /temp/yt-summary_request_*.json
         if [[ "$VERBOSE" == "true" ]] || [[ "$TRANSCRIPT_VERBOSE" == "true" ]]; then
             log_info "Temporary files cleaned."
         fi
