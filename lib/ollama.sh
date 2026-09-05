@@ -12,7 +12,7 @@ set -euo pipefail
 : "${LITELLM_MODEL:=}"
 : "${LITELLM_API_KEY:=}"
 
-STATS_FILE="${STATS_FILE:-$(mktemp -p /temp/ yt-summary-stats-XXXXXX).json}"
+STATS_FILE="${TMP_BASE}/session_stats_$$.json"
 STATS_LOCK="${STATS_FILE}.lock"
 
 _init_stats() {

@@ -1221,6 +1221,9 @@ cleanup_temp() {
             log_info "Cleaning up temporary files..."
         fi
         rm -rf "$TMP_BASE"
+        rm -rf "${TRANSCRIPT_TMP:-}"
+        rm -rf "${METADATA_TMP:-}"
+        rm -rf "$STATS_FILE"
         if [[ "$VERBOSE" == "true" ]] || [[ "$TRANSCRIPT_VERBOSE" == "true" ]]; then
             log_info "Temporary files cleaned."
         fi

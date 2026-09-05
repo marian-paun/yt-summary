@@ -3,8 +3,8 @@
 
 set -euo pipefail
 
-TRANSCRIPT_TMP=$(mktemp -d -p /temp/ yt-summary-transcripts-XXXXXX)
-METADATA_TMP=$(mktemp -d -p /temp/ yt-summary-metadata-XXXXXX)
+TRANSCRIPT_TMP="${TMP_BASE}/transcripts"
+METADATA_TMP="${TMP_BASE}/metadata"
 : "${MAX_PLAYLIST_VIDEO_AGE_DAYS:=0}"  # 0 means no limit
 : "${MAX_PLAYLIST_VIDEOS:=0}"         # 0 means no limit
 
