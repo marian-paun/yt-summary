@@ -87,6 +87,9 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `MAX_RETRIES` | `5` | LLM retries |
 | `SUMMARY_LENGTH` | `medium` | short/medium/long |
 | `TARGET_LANGUAGE` | `en` | Output language |
+| `PROMPT_SYSTEM_CHUNK` / `PROMPT_USER_CHUNK` | *(defaults)* | Chunk-summarization prompts |
+| `PROMPT_SYSTEM_AGGREGATE` / `PROMPT_USER_AGGREGATE` | *(defaults)* | Merge prompts |
+| `PROMPT_SYSTEM_KEYPOINTS` / `PROMPT_USER_KEYPOINTS` | *(defaults)* | Key-points prompts |
 | `CACHE_DIR` | `/tmp/yt-summary-cache` | Where summaries are cached |
 | `USE_LITELLM` | `false` | Deprecated: use `LLM_BACKEND=litellm` |
 | `LITELLM_PROXY_URL` | *(empty)* | LiteLLM proxy URL |

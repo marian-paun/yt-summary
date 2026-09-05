@@ -121,6 +121,44 @@ TARGET_LANGUAGE=en
 CHUNK_WORDS=900
 ```
 
+### Prompt Templates
+
+All prompts are configurable via `PROMPT_SYSTEM_*` and `PROMPT_USER_*` variables.
+`*_SYSTEM` prompts take a single-line value; `*_USER` prompts support multi-line
+values using heredoc syntax. Each user template supports placeholders that are
+replaced at use time:
+
+| Placeholder | Used in template |
+|---|---|
+| `{{LANG}}` | chunk, aggregate, key points |
+| `{{CHUNK_TEXT}}` | chunk |
+| `{{CHUNK_CONTEXT}}` | chunk |
+| `{{MIN_SUMMARY_WORDS}}` | aggregate |
+| `{{LENGTH_GUIDANCE}}` | aggregate |
+| `{{CHUNK_SUMMARIES}}` | aggregate, key points |
+| `{{MIN_BULLETS}}`, `{{MAX_BULLETS}}` | key points |
+| `{{FINAL_SUMMARY}}` | key points |
+
+Templates are:
+`PROMPT_SYSTEM_CHUNK`, `PROMPT_USER_CHUNK`, `PROMPT_SYSTEM_AGGREGATE`,
+`PROMPT_USER_AGGREGATE`, `PROMPT_SYSTEM_KEYPOINTS`, `PROMPT_USER_KEYPOINTS`.
+Leave them unset to use the built-in defaults (see `.env.example`).
+
+```bash
+# Single-line system prompt
+PROMPT_SYSTEM_CHUNK=You are an expert summarizer...
+
+# Multi-line user prompt (heredoc form)
+PROMPT_USER_CHUNK=<<'PROMPT_EOC'
+Summarize this transcript chunk in a single coherent paragraph.
+
+Language: {{LANG}}
+
+Transcript:
+{{CHUNK_TEXT}}
+PROMPT_EOC
+```
+
 ### TTS/Audio Options
 
 ```bash

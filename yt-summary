@@ -24,7 +24,28 @@ load_env_file() {
     fi
 
     local line key value
+    local pending_key="" pending_delim="" acc=""
     while IFS= read -r line || [[ -n "$line" ]]; do
+        # Inside a heredoc value: preserve lines literally until the delimiter.
+        if [[ -n "$pending_key" ]]; then
+            local trimmed="${line#"${line%%[![:space:]]*}"}"
+            trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+            if [[ "$trimmed" == "$pending_delim" ]]; then
+                acc="${acc%$'\n'}"
+                if [[ "$pending_key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+                    export "$pending_key=$acc"
+                else
+                    echo "WARNING: skipping invalid key '$pending_key' in $env_file" >&2
+                fi
+                pending_key=""
+                pending_delim=""
+                acc=""
+            else
+                acc+="${line}"$'\n'
+            fi
+            continue
+        fi
+
         line="${line%%#*}"                       # strip comments
         line="${line#"${line%%[![:space:]]*}"}"  # trim leading whitespace
         line="${line%"${line##*[![:space:]]}"}"  # trim trailing whitespace
@@ -36,6 +57,27 @@ load_env_file() {
         key="${key#export }"                   # allow 'export ' prefix
         key="${key%"${key##*[![:space:]]}"}"   # trim trailing whitespace
         [[ -z "$key" ]] && continue
+        # Heredoc multi-line value: KEY=<<'EOF'  or  KEY=<<EOF
+        if [[ "$value" == "<<'"*"'" ]]; then
+            pending_key="$key"
+            pending_delim="${value#<<\'}"
+            pending_delim="${pending_delim%\'}"
+            acc=""
+            if [[ -z "$pending_delim" ]]; then
+                echo "WARNING: missing heredoc delimiter for key '$key' in $env_file" >&2
+                pending_key=""
+            fi
+            continue
+        elif [[ "$value" == '<<'* ]]; then
+            pending_key="$key"
+            pending_delim="${value#<<}"
+            acc=""
+            if [[ -z "$pending_delim" ]]; then
+                echo "WARNING: missing heredoc delimiter for key '$key' in $env_file" >&2
+                pending_key=""
+            fi
+            continue
+        fi
         # strip surrounding quotes from value
         if [[ "$value" == \"*\" ]]; then
             value="${value#\"}"; value="${value%\"}"
@@ -52,6 +94,86 @@ load_env_file() {
 }
 
 load_env_file
+
+# --- Prompt templates (defaults; overridable via PROMPT_*_SYSTEM/USER in .env) ---
+# Placeholders replaced at use time:
+#   {{LANG}}, {{CHUNK_TEXT}}, {{CHUNK_CONTEXT}}, {{MIN_SUMMARY_WORDS}},
+#   {{LENGTH_GUIDANCE}}, {{CHUNK_SUMMARIES}}, {{MIN_BULLETS}},
+#   {{MAX_BULLETS}}, {{FINAL_SUMMARY}}
+PROMPT_SYSTEM_CHUNK_DEFAULT="You are an expert summarizer specializing in video transcripts. Produce clear, accurate summaries that capture the essential information. Output plain text only—no markdown, no quotes, no prefixes."
+
+PROMPT_USER_CHUNK_DEFAULT=$(cat <<'PROMPT_EOC'
+Summarize this transcript chunk in a single coherent paragraph.
+
+Guidelines:
+- Focus on key facts, decisions, and takeaways
+- Preserve technical terms and proper nouns exactly
+- Write in third person
+- Maintain a neutral, informative tone
+- Omit filler words, tangents, and redundant information
+
+Language: {{LANG}}
+
+Transcript:
+{{CHUNK_TEXT}}
+
+Context: {{CHUNK_CONTEXT}}
+PROMPT_EOC
+)
+
+PROMPT_SYSTEM_AGGREGATE_DEFAULT="You are an expert editor who combines partial summaries into a unified, coherent document. Output plain text only—no markdown, no quotes, no prefixes."
+
+PROMPT_USER_AGGREGATE_DEFAULT=$(cat <<'PROMPT_EOA'
+Combine these chunk summaries into one flowing narrative.
+
+Rules:
+- Maintain chronological order
+- Deduplicate overlapping information
+- Resolve contradictions by preferring later chunks
+- Create smooth transitions between topics
+- Preserve all unique facts, numbers, and names
+- Target length: {{MIN_SUMMARY_WORDS}} words minimum
+
+Length guidance: {{LENGTH_GUIDANCE}}
+
+Language: {{LANG}}
+
+Chunk summaries:
+{{CHUNK_SUMMARIES}}
+PROMPT_EOA
+)
+
+PROMPT_SYSTEM_KEYPOINTS_DEFAULT="You are an expert at distilling information into actionable key points. Output only bullet points—no intro, no summary, no closing remarks."
+
+PROMPT_USER_KEYPOINTS_DEFAULT=$(cat <<'PROMPT_EOK'
+Extract {{MIN_BULLETS}}-{{MAX_BULLETS}} key points from this content.
+
+Each key point should:
+- Be a single, self-contained statement
+- Start with a verb or noun (not 'The' or 'This')
+- Be specific and concrete (include numbers, names, dates when available)
+- Stand alone without requiring context
+- Not repeat information from another bullet
+
+Format: One bullet per line, starting with "- "
+
+Language: {{LANG}}
+
+Summary:
+{{FINAL_SUMMARY}}
+
+Source material:
+{{CHUNK_SUMMARIES}}
+PROMPT_EOK
+)
+
+# Escape a value for literal use inside ${var//pattern/replacement}.
+# Bash interprets '&' (matched pattern) and backslashes in the replacement;
+# sed builds the escaped form so injected transcript/summary text stays literal
+# (handles '&', backslashes, newlines, and embedded quotes safely).
+escape_repl() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/&/\\&/g'
+}
 
 : "${OLLAMA_HOST:=http://localhost:11434}"
 : "${OLLAMA_MODEL:=gemma2:2b}"
@@ -509,27 +631,12 @@ summarize_chunk() {
         ru) lang_instruction="Write the summary in Russian." ;;
     esac
 
-    local system_prompt="You are an expert summarizer specializing in video transcripts. Produce clear, accurate summaries that capture the essential information. Output plain text only—no markdown, no quotes, no prefixes."
+    local system_prompt="${PROMPT_SYSTEM_CHUNK:-$PROMPT_SYSTEM_CHUNK_DEFAULT}"
 
-    local user_prompt
-    user_prompt=$(cat <<EOF
-Summarize this transcript chunk in a single coherent paragraph.
-
-Guidelines:
-- Focus on key facts, decisions, and takeaways
-- Preserve technical terms and proper nouns exactly
-- Write in third person
-- Maintain a neutral, informative tone
-- Omit filler words, tangents, and redundant information
-
-Language: ${lang_instruction}
-
-Transcript:
-${chunk_text}
-
-Context: ${chunk_context}
-EOF
-    )
+    local user_prompt="${PROMPT_USER_CHUNK:-$PROMPT_USER_CHUNK_DEFAULT}"
+    user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
+    user_prompt="${user_prompt//\{\{CHUNK_TEXT\}\}/$(escape_repl "$chunk_text")}"
+    user_prompt="${user_prompt//\{\{CHUNK_CONTEXT\}\}/$(escape_repl "$chunk_context")}"
 
     local max_attempts=3
     local attempt=0
@@ -619,28 +726,16 @@ aggregate_summary() {
         ru) lang_instruction="Write the summary in Russian." ;;
     esac
 
-    local system_prompt="You are an expert editor who combines partial summaries into a unified, coherent document. Output plain text only—no markdown, no quotes, no prefixes."
+    local system_prompt="${PROMPT_SYSTEM_AGGREGATE:-$PROMPT_SYSTEM_AGGREGATE_DEFAULT}"
 
-    local user_prompt
-    user_prompt=$(cat <<EOF
-Combine these chunk summaries into one flowing narrative.
+    local chunk_summaries
+    chunk_summaries=$(cat "$mapped_chunks_ref")
 
-Rules:
-- Maintain chronological order
-- Deduplicate overlapping information
-- Resolve contradictions by preferring later chunks
-- Create smooth transitions between topics
-- Preserve all unique facts, numbers, and names
-- Target length: ${min_summary_words} words minimum
-
-Length guidance: ${length_guidance}
-
-Language: ${lang_instruction}
-
-Chunk summaries:
-$(cat "$mapped_chunks_ref")
-EOF
-    )
+    local user_prompt="${PROMPT_USER_AGGREGATE:-$PROMPT_USER_AGGREGATE_DEFAULT}"
+    user_prompt="${user_prompt//\{\{MIN_SUMMARY_WORDS\}\}/$min_summary_words}"
+    user_prompt="${user_prompt//\{\{LENGTH_GUIDANCE\}\}/$(escape_repl "$length_guidance")}"
+    user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
+    user_prompt="${user_prompt//\{\{CHUNK_SUMMARIES\}\}/$(escape_repl "$chunk_summaries")}"
     
     local max_attempts=3
     local attempt=0
@@ -689,7 +784,7 @@ generate_key_points() {
 
     local bullet_ranges
     bullet_ranges=$(get_length_profile "$SUMMARY_LENGTH")
-    read -r min_bullets max_bullets <<< "$bullet_ranges"
+    read -r min_bullets max_bullets <<< "$(echo "$bullet_ranges" | tail -1)"
 
     local lang_instruction=""
     case "$language" in
@@ -706,30 +801,17 @@ generate_key_points() {
         ru) lang_instruction="Write the key points in Russian." ;;
     esac
 
-    local system_prompt="You are an expert at distilling information into actionable key points. Output only bullet points—no intro, no summary, no closing remarks."
+    local system_prompt="${PROMPT_SYSTEM_KEYPOINTS:-$PROMPT_SYSTEM_KEYPOINTS_DEFAULT}"
 
-    local user_prompt
-    user_prompt=$(cat <<EOF
-Extract ${min_bullets}-${max_bullets} key points from this content.
+    local chunk_summaries
+    chunk_summaries=$(cat "$mapped_chunks_ref")
 
-Each key point should:
-- Be a single, self-contained statement
-- Start with a verb or noun (not 'The' or 'This')
-- Be specific and concrete (include numbers, names, dates when available)
-- Stand alone without requiring context
-- Not repeat information from another bullet
-
-Format: One bullet per line, starting with "- "
-
-Language: ${lang_instruction}
-
-Summary:
-${final_summary}
-
-Source material:
-$(cat "$mapped_chunks_ref")
-EOF
-    )
+    local user_prompt="${PROMPT_USER_KEYPOINTS:-$PROMPT_USER_KEYPOINTS_DEFAULT}"
+    user_prompt="${user_prompt//\{\{MIN_BULLETS\}\}/$min_bullets}"
+    user_prompt="${user_prompt//\{\{MAX_BULLETS\}\}/$max_bullets}"
+    user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
+    user_prompt="${user_prompt//\{\{FINAL_SUMMARY\}\}/$(escape_repl "$final_summary")}"
+    user_prompt="${user_prompt//\{\{CHUNK_SUMMARIES\}\}/$(escape_repl "$chunk_summaries")}"
     
     local max_attempts=3
     local attempt=0
