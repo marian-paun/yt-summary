@@ -281,7 +281,7 @@ ollama_chat() {
     
     # Use temporary file to avoid argument list too long errors
     local tmp_json
-    tmp_json=$(mktemp /temp/yt-summary_request_XXXXXX.json)
+    tmp_json=$(mktemp "${TMP_BASE}/request_XXXXXX.json")
     
     jq -n \
         --arg model "$model_name" \

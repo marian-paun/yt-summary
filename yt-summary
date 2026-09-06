@@ -184,7 +184,6 @@ escape_repl() {
 : "${MAX_RETRIES:=5}"
 : "${SUMMARY_LENGTH:=medium}"
 : "${TARGET_LANGUAGE:=en}"
-: "${CACHE_DIR:=/tmp/yt-summary-cache}"
 : "${MAX_PLAYLIST_VIDEO_AGE_DAYS:=0}"  # 0 means no limit
 : "${MAX_PLAYLIST_VIDEOS:=0}"         # 0 means no limit
 : "${LLM_BACKEND:=ollama}"            # LLM backend: ollama, litellm, omniroute
@@ -200,9 +199,19 @@ escape_repl() {
 : "${TELEGRAM_BOT_TOKEN:=}"
 : "${TELEGRAM_CHAT_ID:=}"
 : "${TELEGRAM_API_URL:=https://api.telegram.org}"
-: "${SEND_TELEGRAM:=false}"
+: "${SEND_TELEGRAM:=true}"
+CLEANUP=true
+TRANSCRIPT_VERBOSE=false
+GENERATE_AUDIO=false
+AUDIO_OUTPUT=""
+: "${AUDIO_FORMAT:=mp3}"
+: "${AUDIO_VOICE:=}"
+: "${VOICES_DIR:=/data/configs/voices}"
+: "${EXTERNAL_TRACKING_FILE:=}"
+
 TMP_BASE=$(mktemp -d -p /temp/ yt-summary-XXXX)
-: "${EXTERNAL_TRACKING_FILE:=/data/ltr/yt-dlp/files}"
+CACHE_DIR=${TMP_BASE}/yt-summary-cache
+trap cleanup_temp EXIT
 
 FORCE=false
 INCLUDE_SUMMARY=true
@@ -210,7 +219,7 @@ INCLUDE_KEY_POINTS=true
 PRINT_OUTPUT=true
 SAVE_OUTPUT=true
 VERBOSE=false
-SHOW_STATS=false
+SHOW_STATS=true
 SHOW_STATS_IN_OUTPUT=false
 THINK=true
 EMAIL_TO=""
@@ -343,9 +352,9 @@ ENVIRONMENT VARIABLES:
     TELEGRAM_BOT_TOKEN         Bot token for Telegram API (default: empty, set via env)
     TELEGRAM_CHAT_ID           Chat ID to send messages to (default: empty, set via env)
     TELEGRAM_API_URL           Telegram API base URL (default: https://api.telegram.org)
-    TMP_BASE                   Temp directory base (default: /temp/yt-summary)
-    EXTERNAL_TRACKING_FILE     Video ID tracking file (default: /data/ltr/yt-dlp/files)
-    VOICES_DIR                 Piper TTS voices directory (default: /data/configs/voices)
+    TMP_BASE                   Temp directory base
+    EXTERNAL_TRACKING_FILE     Video ID tracking file
+    VOICES_DIR                 Piper TTS voices directory
 
 EXAMPLES:
     yt-summary "https://www.youtube.com/watch?v=VIDEO_ID"
@@ -1326,8 +1335,7 @@ cleanup_temp() {
         rm -rf "$TMP_BASE"
         rm -rf "${TRANSCRIPT_TMP:-}"
         rm -rf "${METADATA_TMP:-}"
-        rm -rf "$STATS_FILE"
-        rm -f /temp/yt-summary_request_*.json
+        rm -rf "${STATS_FILE:-}"
         if [[ "$VERBOSE" == "true" ]] || [[ "$TRANSCRIPT_VERBOSE" == "true" ]]; then
             log_info "Temporary files cleaned."
         fi
@@ -1381,7 +1389,6 @@ main() {
     source "${LIB_DIR}/omniroute.sh"
     init_stats
     
-    trap cleanup_temp EXIT
     
     # Backward compatibility: if legacy USE_* flags are set via env but --backend
     # was not passed, derive LLM_BACKEND from them. --backend takes precedence
