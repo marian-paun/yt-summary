@@ -33,6 +33,9 @@ EOF
 }
 
 _update_stats() {
+    if [[ "$TESTING_MODE" == "true" ]]; then
+        return 0  # Skip stats update in testing mode
+    fi
     local eval_count="${1:-0}"
     local prompt_eval_count="${2:-0}"
     local duration_ms="${3:-0}"
@@ -278,7 +281,7 @@ ollama_chat() {
     
     # Use temporary file to avoid argument list too long errors
     local tmp_json
-    tmp_json=$(mktemp /temp/yt-summary_request_XXXXXX.json)
+    tmp_json=$(mktemp "${TMP_BASE}/request_XXXXXX.json")
     
     jq -n \
         --arg model "$model_name" \

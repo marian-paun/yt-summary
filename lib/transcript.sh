@@ -90,7 +90,7 @@ get_playlist_videos() {
     
     # Create temporary file for video metadata
     local temp_file
-    temp_file=$(mktemp)
+    temp_file=$(mktemp -p "${TMP_BASE}")
     
     # Get video URLs with epoch timestamps
     yt-dlp --flat-playlist --print '%(url)s|%(epoch)s' --no-warnings "$playlist_url" 2>/dev/null > "$temp_file"
