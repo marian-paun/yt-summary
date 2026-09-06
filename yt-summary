@@ -215,6 +215,8 @@ SHOW_STATS_IN_OUTPUT=false
 THINK=true
 EMAIL_TO=""
 : "${EMAIL_FROM:=}"
+TESTING_MODE=false
+IGNORE_PROCESSED=false
 
 # Track which backend-specific CLI options were explicitly passed
 CLI_OPT_OLLAMA=""
@@ -288,6 +290,8 @@ OPTIONS:
     --length LENGTH            Summary length: short, medium, long (default: ${SUMMARY_LENGTH})
     --think                     Enable Ollama think mode
     -f, --force                 Force regeneration even if cached
+    --testing                   Testing mode: generate output without caching or stats
+    --ignore-processed          Skip videos that have already been processed
     --summary-only             Only generate summary section
     --key-points-only          Only generate key points section
     --print-only               Print output to console only
@@ -523,6 +527,14 @@ parse_args() {
                 MAX_PLAYLIST_VIDEO_AGE_DAYS="$2"
                 shift 2
                 ;;
+            --testing)
+                TESTING_MODE=true
+                shift
+                ;;
+            --ignore-processed)
+                IGNORE_PROCESSED=true
+                shift
+                ;;
             --backend)
                 case "$2" in
                     ollama|litellm|omniroute)
@@ -572,6 +584,14 @@ parse_args() {
                 ;;
             -v|--verbose)
                 VERBOSE=true
+                shift
+                ;;
+            --testing)
+                TESTING_MODE=true
+                shift
+                ;;
+            --ignore-processed)
+                IGNORE_PROCESSED=true
                 shift
                 ;;
             --help|-h)
@@ -975,7 +995,7 @@ summarize_video() {
     title=$(get_video_title "$url")
     log_info "Video title: $title"
     
-    if [[ "$FORCE" == "false" ]] && cache_is_complete "$video_id" "$INCLUDE_SUMMARY" "$INCLUDE_KEY_POINTS"; then
+    if [[ "$FORCE" == "false" ]] && ! [[ "$IGNORE_PROCESSED" == "true" ]] && cache_is_complete "$video_id" "$INCLUDE_SUMMARY" "$INCLUDE_KEY_POINTS"; then
         log_info "Using cached summary"
         # Generate checksum for the cached content to verify integrity
         local cache_checksum
@@ -1102,7 +1122,8 @@ $(format_stats_markdown)</pre>"
     fi
     
     # Add video ID to external tracking file on successful processing
-    if [[ "$SAVE_OUTPUT" == "true" ]]; then
+    # Skip in testing mode
+    if [[ "$SAVE_OUTPUT" == "true" ]] && [[ "${TESTING_MODE:-false}" != "true" ]]; then
         add_video_id_to_external_file "$video_id"
     fi
     

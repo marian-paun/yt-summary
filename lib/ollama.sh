@@ -33,6 +33,9 @@ EOF
 }
 
 _update_stats() {
+    if [[ "$TESTING_MODE" == "true" ]]; then
+        return 0  # Skip stats update in testing mode
+    fi
     local eval_count="${1:-0}"
     local prompt_eval_count="${2:-0}"
     local duration_ms="${3:-0}"
