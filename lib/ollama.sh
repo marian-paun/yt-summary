@@ -106,8 +106,16 @@ show_stats() {
     
     local total_tokens=$((prompt_tokens + completion_tokens))
     local duration_sec=$((duration_ms / 1000))
-    local remaining_ms=$((duration_ms % 1000))
-    
+    local minutes=$((duration_sec / 60))
+    local seconds=$((duration_sec % 60))
+
+    local duration_str
+    if [[ "$minutes" -gt 0 ]]; then
+        duration_str="${minutes} min ${seconds} sec"
+    else
+        duration_str="${duration_sec}s"
+    fi
+
     local stats_output
     stats_output=$(
         echo ""
@@ -121,7 +129,7 @@ show_stats() {
         printf "%-20s %s\n" "Total tokens:" "$total_tokens"
         printf "%-20s %s\n" "Input words:" "$input_words"
         printf "%-20s %s\n" "Output words:" "$output_words"
-        printf "%-20s %s.%03ds\n" "Duration:" "$duration_sec" "$remaining_ms"
+        printf "%-20s %s\n" "Duration:" "$duration_str"
         echo "========================================"
     )
     
@@ -146,13 +154,21 @@ format_stats_markdown() {
     duration_ms=$(echo "$stats" | jq -r '.total_duration_ms')
     videos=$(echo "$stats" | jq -r '.videos_processed')
     
-    local total_tokens=$((prompt_tokens + completion_tokens))
+local total_tokens=$((prompt_tokens + completion_tokens))
     local duration_sec=$((duration_ms / 1000))
-    local remaining_ms=$((duration_ms % 1000))
-    
+    local minutes=$((duration_sec / 60))
+    local seconds=$((duration_sec % 60))
+
+    local duration_str
+    if [[ "$minutes" -gt 0 ]]; then
+        duration_str="${minutes} min ${seconds} sec"
+    else
+        duration_str="${duration_sec}s"
+    fi
+
     local timestamp
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    
+
     local stats_output
     stats_output=$(
         printf '\n=============================\n           Session Statistics\n=============================\n'
@@ -163,7 +179,7 @@ format_stats_markdown() {
         printf '%-14s %14s\n' "Total tokens:" "$total_tokens"
         printf '%-14s %14s\n' "Input words:" "$input_words"
         printf '%-14s %14s\n' "Output words:" "$output_words"
-        printf '%-14s %14s\n' "Duration:" "${duration_sec}.$(printf '%03d' "$remaining_ms")s"
+        printf '%-14s %14s\n' "Duration:" "$duration_str"
         printf '=============================\n'
     )
 
