@@ -103,6 +103,10 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `AUDIO_FORMAT` | `mp3` | Audio output format |
 | `AUDIO_VOICE` | *(empty)* | Explicit voice name |
 | `VOICES_DIR` | `/data/configs/voices` | Piper TTS voices directory |
+| `DEFAULT_VOICE_PIPER_EN` | `en_GB-alan-medium` | Default English voice for piper (filename, no `.onnx`) when `--voice` unset |
+| `DEFAULT_VOICE_PIPER_RO` | `ro_RO-mihai-medium` | Default Romanian voice for piper (filename, no `.onnx`) when `--voice` unset |
+| `DEFAULT_VOICE_TTS_EN` | `en-US-EmmaMultilingualNeural` | Default English voice for edge-tts (voice name) when `--voice` unset |
+| `DEFAULT_VOICE_TTS_RO` | `ro-RO-AlinaNeural` | Default Romanian voice for edge-tts (voice name) when `--voice` unset |
 | `TELEGRAM_BOT_TOKEN` | *(empty)* | Telegram bot token |
 | `TELEGRAM_CHAT_ID` | *(empty)* | Telegram chat ID |
 | `TELEGRAM_API_URL` | `https://api.telegram.org` | Telegram API base URL |
