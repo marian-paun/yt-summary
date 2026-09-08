@@ -224,10 +224,10 @@ get_voice_for_language() {
 
     case "$language" in
         ro)
-            echo "${voices_dir}/ro_RO-mihai-medium.onnx"
+            echo "${voices_dir}/${DEFAULT_VOICE_PIPER_RO:-ro_RO-mihai-medium}.onnx"
             ;;
         *)
-            echo "${voices_dir}/en_GB-alan-medium.onnx"
+            echo "${voices_dir}/${DEFAULT_VOICE_PIPER_EN:-en_GB-alan-medium}.onnx"
             ;;
     esac
 }
@@ -278,7 +278,7 @@ get_edge_tts_voice() {
     
     # Return a default voice for the language
     case "$language" in
-        en) echo "en-US-EmmaMultilingualNeural" ;;
+        en) echo "${DEFAULT_VOICE_TTS_EN:-en-US-EmmaMultilingualNeural}" ;;
         es) echo "es-ES-ElviraNeural" ;;
         fr) echo "fr-FR-DeniseNeural" ;;
         de) echo "de-DE-KatjaNeural" ;;
@@ -290,8 +290,8 @@ get_edge_tts_voice() {
         ru) echo "ru-RU-SvetlanaNeural" ;;
         ar) echo "ar-EG-SalmaNeural" ;;
         hi) echo "hi-IN-SwaraNeural" ;;
-        ro) echo "ro-RO-AlinaNeural" ;;
-        *) echo "en-US-EmmaMultilingualNeural" ;;
+        ro) echo "${DEFAULT_VOICE_TTS_RO:-ro-RO-AlinaNeural}" ;;
+        *) echo "${DEFAULT_VOICE_TTS_EN:-en-US-EmmaMultilingualNeural}" ;;
     esac
 }
 

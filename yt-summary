@@ -215,6 +215,8 @@ AUDIO_OUTPUT=""
 : "${AUDIO_FORMAT:=mp3}"
 : "${AUDIO_VOICE:=}"
 : "${VOICES_DIR:=}"
+: "${DEFAULT_VOICE_PIPER_EN:=en_GB-alan-medium}"
+: "${DEFAULT_VOICE_PIPER_RO:=ro_RO-mihai-medium}"
 : "${EXTERNAL_TRACKING_FILE:=}"
 
 TMP_BASE=$(mktemp -d -p /temp/ yt-summary-XXXX)
@@ -247,6 +249,10 @@ AUDIO_OUTPUT=""
 : "${AUDIO_FORMAT:=mp3}"
 : "${AUDIO_VOICE:=}"
 : "${VOICES_DIR:=}"
+: "${DEFAULT_VOICE_PIPER_EN:=en_GB-alan-medium}"
+: "${DEFAULT_VOICE_PIPER_RO:=ro_RO-mihai-medium}"
+: "${DEFAULT_VOICE_TTS_EN:=en-US-EmmaMultilingualNeural}"
+: "${DEFAULT_VOICE_TTS_RO:=ro-RO-AlinaNeural}"
 
 log_debug() {
     if [[ "$VERBOSE" == "true" ]]; then
@@ -363,6 +369,10 @@ ENVIRONMENT VARIABLES:
     TMP_BASE                   Temp directory base
     EXTERNAL_TRACKING_FILE     Video ID tracking file
     VOICES_DIR                 Piper TTS voices directory
+    DEFAULT_VOICE_PIPER_EN     Default English piper voice (filename in VOICES_DIR, no .onnx)
+    DEFAULT_VOICE_PIPER_RO     Default Romanian piper voice (filename in VOICES_DIR, no .onnx)
+    DEFAULT_VOICE_TTS_EN       Default English edge-tts voice (voice name)
+    DEFAULT_VOICE_TTS_RO       Default Romanian edge-tts voice (voice name)
 
 EXAMPLES:
     yt-summary "https://www.youtube.com/watch?v=VIDEO_ID"
