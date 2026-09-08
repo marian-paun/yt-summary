@@ -14,7 +14,7 @@ _A modern, local-first CLI tool to extract transcripts from YouTube and transfor
 
 `yt-summary` is a command-line tool that converts YouTube videos into clean Markdown summaries using transcripts and Large Language Models.
 
-Give it a video URL, a playlist, or a file containing multiple URLs, and `yt-summary` will fetch the transcript, summarize the content in manageable chunks, and generate a readable Markdown document with a summary and optional key points.
+Give it a video URL, a playlist, or a file containing multiple URLs, and `yt-summary` will fetch the transcript, summarize the content in manageable chunks, and generate a readable Markdown document with a summary and optional key points. If required it can also generate audio versions of the summary.
 
 It's designed to be simple, fast, and automation-friendly, making it easy to extract useful information from long, informational videos.
 By default, `yt-summary` is local-first and privacy-friendly when used with Ollama, while still supporting cloud models via LiteLLM or Omniroute proxies.
@@ -28,7 +28,7 @@ By default, `yt-summary` is local-first and privacy-friendly when used with Olla
 - Generate clean Markdown summaries with optional key points.
 - Summarize a single video, a playlist, or a batch of URLs.
 - Optimized for Small Language Models (SLMs), which are often sufficient for high-quality summarization.
-- **Multiple LLM backends**: Ollama (local), LiteLLM, or Omniroute (cloud proxies).
+- **Multiple LLM backends**: Ollama (local or cloud), LiteLLM, or Omniroute (cloud proxies).
 - Multi-language summaries: uses native transcripts when available, with automatic fallback and translation.
 - Handles long videos via transcript chunking.
 - Skips reprocessing when a summary already exists (with an option to force regeneration).
