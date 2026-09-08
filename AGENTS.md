@@ -86,7 +86,7 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `TEMPERATURE` | `0.1` | LLM temperature |
 | `MAX_RETRIES` | `5` | LLM retries |
 | `SUMMARY_LENGTH` | `medium` | short/medium/long |
-| `TARGET_LANGUAGE` | `en` | Output language |
+| `TARGET_LANGUAGE` | `en` | Output language. If set (env/.env/`--language`), it is respected; otherwise per-video audio-language detection applies (Romanian audio → Romanian, otherwise English) |
 | `PROMPT_SYSTEM_CHUNK` / `PROMPT_USER_CHUNK` | *(defaults)* | Chunk-summarization prompts |
 | `PROMPT_SYSTEM_AGGREGATE` / `PROMPT_USER_AGGREGATE` | *(defaults)* | Merge prompts |
 | `PROMPT_SYSTEM_KEYPOINTS` / `PROMPT_USER_KEYPOINTS` | *(defaults)* | Key-points prompts |

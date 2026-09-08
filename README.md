@@ -114,8 +114,10 @@ OMNIROUTE_API_KEY=...
 # Summary length: short, medium, long
 SUMMARY_LENGTH=medium
 
-# Output language
-TARGET_LANGUAGE=en
+# Output language (default). Only applied when --language/TARGET_LANGUAGE is
+# NOT set. When no explicit language is requested, per-video audio-language
+# detection runs: Romanian audio -> Romanian; any other audio -> English.
+ TARGET_LANGUAGE=en
 
 # Chunk size (words)
 CHUNK_WORDS=900

@@ -178,11 +178,19 @@ escape_repl() {
 : "${OLLAMA_HOST:=http://localhost:11434}"
 : "${OLLAMA_MODEL:=gemma2:2b}"
 : "${OLLAMA_NUM_CTX:=24000}"
-: "${CHUNK_WORDS:=900}"
+: "${CHUNK_WORDS:=1000}"
 : "${MAX_TOKENS:=30000}"
 : "${TEMPERATURE:=0.1}"
 : "${MAX_RETRIES:=5}"
 : "${SUMMARY_LENGTH:=medium}"
+# Track whether the user explicitly set the target language (via env/.env).
+# If so, that requested language is respected and the per-video
+# Romanian/English audio-language detection is skipped.
+if [[ -n "${TARGET_LANGUAGE:-}" ]]; then
+    LANG_EXPLICIT=true
+else
+    LANG_EXPLICIT=false
+fi
 : "${TARGET_LANGUAGE:=en}"
 : "${MAX_PLAYLIST_VIDEO_AGE_DAYS:=0}"  # 0 means no limit
 : "${MAX_PLAYLIST_VIDEOS:=0}"         # 0 means no limit
@@ -192,7 +200,7 @@ escape_repl() {
 : "${LITELLM_MODEL:=}"
 : "${LITELLM_API_KEY:=}"
 : "${USE_OMNIROUTE:=false}"           # Deprecated: use LLM_BACKEND instead
-: "${OMNIROUTE_URL:=http://localhost:20128}"
+: "${OMNIROUTE_URL:=}"
 : "${OMNIROUTE_MODEL:=}"
 : "${OMNIROUTE_API_KEY:=}"
 : "${TTS_ENGINE:=piper}"              # TTS engine: piper or edge-tts
@@ -206,7 +214,7 @@ GENERATE_AUDIO=false
 AUDIO_OUTPUT=""
 : "${AUDIO_FORMAT:=mp3}"
 : "${AUDIO_VOICE:=}"
-: "${VOICES_DIR:=/data/configs/voices}"
+: "${VOICES_DIR:=}"
 : "${EXTERNAL_TRACKING_FILE:=}"
 
 TMP_BASE=$(mktemp -d -p /temp/ yt-summary-XXXX)
@@ -219,7 +227,7 @@ INCLUDE_KEY_POINTS=true
 PRINT_OUTPUT=true
 SAVE_OUTPUT=true
 VERBOSE=false
-SHOW_STATS=true
+SHOW_STATS=false
 SHOW_STATS_IN_OUTPUT=false
 THINK=true
 EMAIL_TO=""
@@ -238,7 +246,7 @@ GENERATE_AUDIO=false
 AUDIO_OUTPUT=""
 : "${AUDIO_FORMAT:=mp3}"
 : "${AUDIO_VOICE:=}"
-: "${VOICES_DIR:=/data/configs/voices}"
+: "${VOICES_DIR:=}"
 
 log_debug() {
     if [[ "$VERBOSE" == "true" ]]; then
@@ -446,6 +454,7 @@ parse_args() {
                 ;;
             -l|--language)
                 TARGET_LANGUAGE="$2"
+                LANG_EXPLICIT=true
                 shift 2
                 ;;
             --length)
@@ -1020,6 +1029,17 @@ summarize_video() {
         return
     fi
     
+    # If the user explicitly set a target language (--language or TARGET_LANGUAGE),
+    # respect it. Otherwise, detect the audio language: Romanian audio ->
+    # Romanian transcript + Romanian summary; anything else -> English.
+    if [[ "${LANG_EXPLICIT:-false}" != "true" ]]; then
+        local audio_lang
+        audio_lang=$(detect_audio_language "$url")
+        TRANSCRIPT_LANG="$audio_lang"
+        TARGET_LANGUAGE="$audio_lang"
+        log_info "Detected audio language: $audio_lang"
+    fi
+
     log_info "Fetching transcript..."
     local transcript_file
     transcript_file=$(fetch_transcript "$video_id" "$TRANSCRIPT_LANG")
@@ -1293,7 +1313,7 @@ send_telegram() {
 # Check if video ID exists in the external tracking file
 video_id_exists_in_external_file() {
     local video_id="$1"
-    local external_file="${EXTERNAL_TRACKING_FILE:-/data/ltr/yt-dlp/files}"
+    local external_file="${EXTERNAL_TRACKING_FILE}"
     
     # Create directory if it doesn't exist
     mkdir -p "$(dirname "$external_file")"
@@ -1315,7 +1335,7 @@ video_id_exists_in_external_file() {
 # Add video ID to external tracking file
 add_video_id_to_external_file() {
     local video_id="$1"
-    local external_file="${EXTERNAL_TRACKING_FILE:-/data/ltr/yt-dlp/files}"
+    local external_file="${EXTERNAL_TRACKING_FILE}"
     
     # Create directory if it doesn't exist
     mkdir -p "$(dirname "$external_file")"

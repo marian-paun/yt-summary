@@ -450,3 +450,48 @@ get_transcript_word_count() {
     local transcript_file="$1"
     wc -w < "$transcript_file"
 }
+detect_audio_language() {
+    local url="$1"
+    local video_id
+    video_id=$(extract_video_id "$url")
+
+    _transcript_init
+
+    local cache_file="${METADATA_TMP}/${video_id}.audio_lang"
+    if [[ -f "$cache_file" ]]; then
+        cat "$cache_file"
+        return
+    fi
+
+    local lang="en"
+
+    # Primary signal: yt-dlp metadata reports the video's language.
+    local reported
+    reported=$(yt-dlp --skip-download --no-warnings --print "%(language)s" "$url" 2>/dev/null)
+
+    if [[ -n "$reported" ]]; then
+        case "$reported" in
+            ro|ro-*) lang="ro" ;;
+            *)       lang="en" ;;
+        esac
+        echo "$lang" > "$cache_file"
+        echo "$lang"
+        return
+    fi
+
+    # Fallback: check manual subtitles for a Romanian track (a strong
+    # indicator the audio itself is Romanian).
+    local subs
+    subs=$(yt-dlp --list-subs --skip-download --no-warnings "$url" 2>/dev/null)
+    if printf '%s\n' "$subs" | awk '
+        /^\[info\] Available subtitles/ { in_manual=1; next }
+        /^\[info\] Available (automatic )?captions/ { in_manual=0; next }
+        in_manual && /^ro[[:space:]-]/ { found=1; exit }
+        END { exit !found }
+    '; then
+        lang="ro"
+    fi
+
+    echo "$lang" > "$cache_file"
+    echo "$lang"
+}
