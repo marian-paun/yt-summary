@@ -100,16 +100,16 @@ load_env_file
 #   {{LANG}}, {{CHUNK_TEXT}}, {{CHUNK_CONTEXT}}, {{MIN_SUMMARY_WORDS}},
 #   {{LENGTH_GUIDANCE}}, {{CHUNK_SUMMARIES}}, {{MIN_BULLETS}},
 #   {{MAX_BULLETS}}, {{FINAL_SUMMARY}}
-PROMPT_SYSTEM_CHUNK_DEFAULT="You are an expert summarizer specializing in video transcripts. Produce clear, accurate summaries that capture the essential information. Output plain text only—no markdown, no quotes, no prefixes."
+PROMPT_SYSTEM_CHUNK_DEFAULT="You are an expert summarizer specializing in video transcripts. Produce clear, accurate summaries that capture the essential information, incliuding sufficient details for a correct understanding of the summarized text. Output plain text only — no markdown, no quotes, no prefixes."
 
 PROMPT_USER_CHUNK_DEFAULT=$(cat <<'PROMPT_EOC'
 Summarize this transcript chunk in a single coherent paragraph.
 
 Guidelines:
-- Focus on key facts, decisions, and takeaways
+- Focus on key facts, decisions, and takeaways, but include sufficient detail for a clear understanding of the summarized ideas
 - Preserve technical terms and proper nouns exactly
 - Write in third person
-- Maintain a neutral, informative tone
+- Maintain the tone of the summarized text
 - Omit filler words, tangents, and redundant information
 
 Language: {{LANG}}
@@ -121,7 +121,7 @@ Context: {{CHUNK_CONTEXT}}
 PROMPT_EOC
 )
 
-PROMPT_SYSTEM_AGGREGATE_DEFAULT="You are an expert editor who combines partial summaries into a unified, coherent document. Output plain text only—no markdown, no quotes, no prefixes."
+PROMPT_SYSTEM_AGGREGATE_DEFAULT="You are an expert editor who combines partial summaries into a unified, coherent document. Output plain text only — no markdown, no quotes, no prefixes."
 
 PROMPT_USER_AGGREGATE_DEFAULT=$(cat <<'PROMPT_EOA'
 Combine these chunk summaries into one flowing narrative.
@@ -143,7 +143,7 @@ Chunk summaries:
 PROMPT_EOA
 )
 
-PROMPT_SYSTEM_KEYPOINTS_DEFAULT="You are an expert at distilling information into actionable key points. Output only bullet points—no intro, no summary, no closing remarks."
+PROMPT_SYSTEM_KEYPOINTS_DEFAULT="You are an expert at distilling information into actionable key points. Output only bullet points — no intro, no summary, no closing remarks."
 
 PROMPT_USER_KEYPOINTS_DEFAULT=$(cat <<'PROMPT_EOK'
 Extract {{MIN_BULLETS}}-{{MAX_BULLETS}} key points from this content.
@@ -178,8 +178,8 @@ escape_repl() {
 : "${OLLAMA_HOST:=http://localhost:11434}"
 : "${OLLAMA_MODEL:=gemma2:2b}"
 : "${OLLAMA_NUM_CTX:=24000}"
-: "${CHUNK_WORDS:=1000}"
-: "${MAX_TOKENS:=30000}"
+: "${CHUNK_WORDS:=5000}"
+: "${MAX_TOKENS:=60000}"
 : "${TEMPERATURE:=0.1}"
 : "${MAX_RETRIES:=5}"
 : "${SUMMARY_LENGTH:=medium}"
@@ -208,6 +208,10 @@ fi
 : "${TELEGRAM_CHAT_ID:=}"
 : "${TELEGRAM_API_URL:=https://api.telegram.org}"
 : "${SEND_TELEGRAM:=true}"
+: "${MQTT_BROKER:=}"
+: "${MQTT_TOPIC:=}"
+: "${MQTT_USER:=}"
+: "${MQTT_PASSWORD:=}"
 CLEANUP=true
 TRANSCRIPT_VERBOSE=false
 GENERATE_AUDIO=false
@@ -447,11 +451,11 @@ parse_args() {
                 shift 2
                 ;;
             --chunk-words)
-                CHUNK_WORDS="${2:-900}"
+                CHUNK_WORDS="${2:-2000}"
                 shift 2
                 ;;
             --max-tokens)
-                MAX_TOKENS="${2:-30000}"
+                MAX_TOKENS="${2:-50000}"
                 shift 2
                 ;;
             --temperature)
@@ -1319,6 +1323,68 @@ send_telegram() {
     fi
 }
 
+send_mqtt() {
+    local payload="$1"
+
+    if [[ -z "$MQTT_BROKER" ]] || [[ -z "$MQTT_TOPIC" ]]; then
+        log_warn "MQTT not sent: missing MQTT_BROKER or MQTT_TOPIC"
+        return 0
+    fi
+
+    if ! command -v mosquitto_pub &>/dev/null; then
+        log_warn "MQTT not sent: mosquitto_pub not found"
+        return 0
+    fi
+
+    local mqtt_args=(-h "$MQTT_BROKER" -t "$MQTT_TOPIC" -m "$payload" -q 0)
+
+    if [[ -n "$MQTT_USER" ]]; then
+        mqtt_args+=(-u "$MQTT_USER")
+    fi
+    if [[ -n "$MQTT_PASSWORD" ]]; then
+        mqtt_args+=(-P "$MQTT_PASSWORD")
+    fi
+
+    if mosquitto_pub "${mqtt_args[@]}" >/dev/null 2>&1; then
+        log_info "MQTT message sent to $MQTT_TOPIC"
+    else
+        log_warn "Failed to send MQTT message to $MQTT_TOPIC"
+    fi
+}
+
+send_mqtt_stats() {
+    if [[ ! -f "$STATS_FILE" ]]; then
+        log_warn "MQTT stats not sent: stats file not found"
+        return 0
+    fi
+
+    local stats
+    stats=$(cat "$STATS_FILE")
+
+    local payload
+    payload=$(jq -n \
+        --arg timestamp "$(date '+%Y-%m-%dT%H:%M:%S')" \
+        --argjson videos_processed "$(echo "$stats" | jq -r '.videos_processed')" \
+        --argjson total_requests "$(echo "$stats" | jq -r '.total_requests')" \
+        --argjson total_prompt_tokens "$(echo "$stats" | jq -r '.total_prompt_tokens')" \
+        --argjson total_completion_tokens "$(echo "$stats" | jq -r '.total_completion_tokens')" \
+        --argjson total_input_words "$(echo "$stats" | jq -r '.total_input_words')" \
+        --argjson total_output_words "$(echo "$stats" | jq -r '.total_output_words')" \
+        --argjson total_duration_ms "$(echo "$stats" | jq -r '.total_duration_ms')" \
+        '{
+            timestamp: $timestamp,
+            videos_processed: $videos_processed,
+            total_requests: $total_requests,
+            total_prompt_tokens: $total_prompt_tokens,
+            total_completion_tokens: $total_completion_tokens,
+            total_input_words: $total_input_words,
+            total_output_words: $total_output_words,
+            total_duration_ms: $total_duration_ms
+        }')
+
+    send_mqtt "$payload"
+}
+
 
 # Check if video ID exists in the external tracking file
 video_id_exists_in_external_file() {
@@ -1469,5 +1535,7 @@ main() {
     if [[ "$SHOW_STATS" == "true" ]]; then
         show_stats
     fi
+
+    send_mqtt_stats
 }
 main "$@"
