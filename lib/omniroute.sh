@@ -20,11 +20,15 @@ omniroute_chat() {
     local start_ns
     start_ns=$(date +%s%N)
     
-    local request_body
-    request_body=$(jq -n \
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    printf '%s' "$system" > "$tmp_dir/system.txt"
+    printf '%s' "$user" > "$tmp_dir/user.txt"
+
+    jq -n \
         --arg model "$model_name" \
-        --arg system "$system" \
-        --arg user "$user" \
+        --rawfile system "$tmp_dir/system.txt" \
+        --rawfile user "$tmp_dir/user.txt" \
         --argjson temperature "$TEMPERATURE" \
         --argjson max_tokens "$MAX_TOKENS" \
         --argjson stream false \
@@ -37,7 +41,7 @@ omniroute_chat() {
             temperature: $temperature,
             max_tokens: $max_tokens,
             stream: $stream
-        }')
+        }' > "$tmp_dir/request.json"
     
     local headers=("-H" "Content-Type: application/json")
     if [[ -n "$OMNIROUTE_API_KEY" ]]; then
@@ -47,7 +51,8 @@ omniroute_chat() {
     local response
     response=$(curl -s --max-time 300 -X POST "$OMNIROUTE_URL/v1/chat/completions" \
         "${headers[@]}" \
-        -d "$request_body")
+        -d "@$tmp_dir/request.json")
+    rm -rf "$tmp_dir"
     
     local end_ns
     end_ns=$(date +%s%N)
