@@ -265,15 +265,21 @@ log_debug() {
 }
 
 log_info() {
-    echo "[INFO] $*" | systemd-cat -p 4 -t yt-summary
+    if [[ "$VERBOSE" == "true" ]]; then
+        echo "[INFO] $*" | systemd-cat -p 4 -t yt-summary
+    fi
 }
 
 log_warn() {
-    echo "[WARN] $*" | systemd-cat -p 4 -t yt-summary
+    if [[ "$VERBOSE" == "true" ]]; then
+        echo "[WARN] $*" | systemd-cat -p 4 -t yt-summary
+    fi
 }
 
 log_error() {
-    echo "[ERROR] $*" | systemd-cat -p 4 -t yt-summary
+    if [[ "$VERBOSE" == "true" ]]; then
+        echo "[ERROR] $*" | systemd-cat -p 4 -t yt-summary
+    fi
 }
 
 usage() {
