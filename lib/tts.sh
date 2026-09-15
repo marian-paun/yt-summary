@@ -428,6 +428,12 @@ generate_audio() {
     local language="${6:-en}"
     local voices_dir="${7:-${VOICES_DIR:-/data/configs/voices}}"
 
+    # Strip markdown headers, section titles, chapter markers, and bullet point markers for audio reading
+    text=$(echo "$text" | sed -E 's/^[#[:space:]]*(Summary|Key Points|Key-Points|Overview|Highlights|Key Takeaways)[[:space:]]*$//gi' \
+                       | sed -E 's/^[#[:space:]]+//' \
+                       | sed -E 's/^[[:space:]]*[-*+][[:space:]]+//' \
+                       | sed -E '/^[[:space:]]*$/d')
+
     # Try to generate SSML with multi-language voice switching
     local ssml_output=""
     local use_ssml=false

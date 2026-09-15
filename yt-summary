@@ -103,7 +103,7 @@ load_env_file
 PROMPT_SYSTEM_CHUNK_DEFAULT="You are an expert summarizer specializing in video transcripts. Produce clear, accurate summaries that capture the essential information, incliuding sufficient details for a correct understanding of the summarized text. Output plain text only — no markdown, no quotes, no prefixes."
 
 PROMPT_USER_CHUNK_DEFAULT=$(cat <<'PROMPT_EOC'
-Summarize this transcript chunk in a single coherent paragraph.
+Summarize this transcript chunk into a fluent narative.
 
 Guidelines:
 - Focus on key facts, decisions, and takeaways, but include sufficient detail for a clear understanding of the summarized ideas
@@ -1114,18 +1114,18 @@ summarize_video() {
         i=$((i + 1))
     done
     
-    log_info "Aggregating chunk summaries..."
-    local length_profile
-    length_profile=$(get_length_profile "$SUMMARY_LENGTH")
-    local length_guidance
-    length_guidance=$(echo "$length_profile" | head -1)
-    
     local final_summary=""
     if [[ "$INCLUDE_SUMMARY" == "true" ]]; then
-        if ! final_summary=$(aggregate_summary "$mapped_chunks_file" "$chunk_count" "$length_guidance" "$TARGET_LANGUAGE"); then
-            log_error "Failed to aggregate summary"
-            rm -rf "$chunks_dir" "$mapped_chunks_file"
-            return 1
+        if [[ $chunk_count -eq 1 ]]; then
+            # Single chunk: use the chunk summary directly without redundant aggregation
+            final_summary=$(sed '/^\[Chunk 1\]$/d; /^---$/d' "$mapped_chunks_file" | sed '/^[[:space:]]*$/d')
+        else
+            log_info "Aggregating chunk summaries..."
+            if ! final_summary=$(aggregate_summary "$mapped_chunks_file" "$chunk_count" "$length_guidance" "$TARGET_LANGUAGE"); then
+                log_error "Failed to aggregate summary"
+                rm -rf "$chunks_dir" "$mapped_chunks_file"
+                return 1
+            fi
         fi
     fi
     
