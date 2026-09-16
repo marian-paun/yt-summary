@@ -133,7 +133,9 @@ show_stats() {
         echo "========================================"
     )
     
-    echo "$stats_output" | systemd-cat -p 4 -t yt-summary
+    if [[ "${VERBOSE:-false}" == "true" ]]; then
+        echo "$stats_output" | systemd-cat -p 4 -t yt-summary
+    fi
     echo "$stats_output"
 }
 
@@ -184,7 +186,9 @@ local total_tokens=$((prompt_tokens + completion_tokens))
     )
 
     
-    echo "$stats_output" | systemd-cat -p 4 -t yt-summary
+    if [[ "${VERBOSE:-false}" == "true" ]]; then
+        echo "$stats_output" | systemd-cat -p 4 -t yt-summary
+    fi
     echo "$stats_output"
 }
 
