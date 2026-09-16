@@ -5,8 +5,8 @@ set -euo pipefail
 
 : "${OLLAMA_HOST:=http://localhost:11434}"
 : "${OLLAMA_NUM_CTX:=24000}"
-: "${MAX_TOKENS:=16384}"
-: "${TEMPERATURE:=1.0}"
+: "${MAX_TOKENS:=30000}"
+: "${TEMPERATURE:=0.1}"
 : "${USE_LITELLM:=false}"
 : "${LITELLM_PROXY_URL:=}"
 : "${LITELLM_MODEL:=}"

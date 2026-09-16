@@ -38,11 +38,11 @@ Three backends are supported via `--backend` or `LLM_BACKEND` env var:
 
 | Backend | Description | Options |
 |---------|-------------|---------|
-| `ollama` | Default local backend | `--model`, `--host`, `--num-ctx`, `--think` |
-| `litellm` | LiteLLM proxy (cloud models) | `--litellm-proxy`, `--litellm-model`, `--litellm-key` |
-| `omniroute` | Omniroute proxy (model routing) | `--omniroute`, `--omniroute-model`, `--omniroute-key` |
+| `ollama` | Default local backend | `-m`/`--model`, `--url`/`-h`, `--num-ctx`, `--think` |
+| `litellm` | LiteLLM proxy (cloud models) | `--backend litellm`, `-m`/`--model`, `--url`/`--proxy`, `--api-key` |
+| `omniroute` | Omniroute proxy (model routing) | `--backend omniroute`, `-m`/`--model`, `--url`/`--proxy`, `--api-key` |
 
-Only options for the selected backend are applied.
+Unified flags (`-m`/`--model`, `--url`/`--proxy`, `--api-key`/`--key`) work across all backends. Legacy backend flags (`--litellm-proxy`, `--omniroute`, `--litellm-model`, etc.) remain supported as backward-compatible aliases.
 
 ## Output Options
 
