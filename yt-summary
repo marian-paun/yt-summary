@@ -178,8 +178,8 @@ escape_repl() {
 : "${OLLAMA_HOST:=http://localhost:11434}"
 : "${OLLAMA_MODEL:=gemma2:2b}"
 : "${OLLAMA_NUM_CTX:=24000}"
-: "${CHUNK_WORDS:=5000}"
-: "${MAX_TOKENS:=60000}"
+: "${CHUNK_WORDS:=900}"
+: "${MAX_TOKENS:=30000}"
 : "${TEMPERATURE:=0.1}"
 : "${MAX_RETRIES:=5}"
 : "${SUMMARY_LENGTH:=medium}"
@@ -195,6 +195,9 @@ fi
 : "${MAX_PLAYLIST_VIDEO_AGE_DAYS:=0}"  # 0 means no limit
 : "${MAX_PLAYLIST_VIDEOS:=0}"         # 0 means no limit
 : "${LLM_BACKEND:=ollama}"            # LLM backend: ollama, litellm, omniroute
+: "${LLM_MODEL:=}"
+: "${LLM_URL:=}"
+: "${LLM_API_KEY:=}"
 : "${USE_LITELLM:=false}"             # Deprecated: use LLM_BACKEND instead
 : "${LITELLM_PROXY_URL:=}"
 : "${LITELLM_MODEL:=}"
@@ -221,6 +224,8 @@ AUDIO_OUTPUT=""
 : "${VOICES_DIR:=}"
 : "${DEFAULT_VOICE_PIPER_EN:=en_GB-alan-medium}"
 : "${DEFAULT_VOICE_PIPER_RO:=ro_RO-mihai-medium}"
+: "${DEFAULT_VOICE_TTS_EN:=en-US-EmmaMultilingualNeural}"
+: "${DEFAULT_VOICE_TTS_RO:=ro-RO-AlinaNeural}"
 : "${EXTERNAL_TRACKING_FILE:=}"
 
 TMP_BASE=$(mktemp -d -p /temp/ yt-summary-XXXX)
@@ -240,23 +245,12 @@ EMAIL_TO=""
 : "${EMAIL_FROM:=}"
 TESTING_MODE=false
 IGNORE_PROCESSED=false
+SHOW_ALL_HELP=false
 
 # Track which backend-specific CLI options were explicitly passed
 CLI_OPT_OLLAMA=""
 CLI_OPT_LITELLM=""
 CLI_OPT_OMNIROUTE=""
-
-CLEANUP=true
-TRANSCRIPT_VERBOSE=false
-GENERATE_AUDIO=false
-AUDIO_OUTPUT=""
-: "${AUDIO_FORMAT:=mp3}"
-: "${AUDIO_VOICE:=}"
-: "${VOICES_DIR:=}"
-: "${DEFAULT_VOICE_PIPER_EN:=en_GB-alan-medium}"
-: "${DEFAULT_VOICE_PIPER_RO:=ro_RO-mihai-medium}"
-: "${DEFAULT_VOICE_TTS_EN:=en-US-EmmaMultilingualNeural}"
-: "${DEFAULT_VOICE_TTS_RO:=ro-RO-AlinaNeural}"
 
 log_debug() {
     if [[ "$VERBOSE" == "true" ]]; then
@@ -289,109 +283,81 @@ yt-summary - YouTube video summarizer using Ollama/LiteLLM/Omniroute
 USAGE:
     yt-summary [options] <target>
     yt-summary --help
+    yt-summary --help-all
 
 TARGET:
     YouTube video URL, playlist URL, or text file containing URLs (one per line)
 
-OPTIONS:
-        --backend BACKEND      LLM backend to use: ollama, litellm, omniroute
-                               (default: ${LLM_BACKEND})
-                               Only options relevant to the selected backend
-                               are applied; other backend options are ignored.
+BACKEND & MODEL OPTIONS:
+    --backend BACKEND          LLM backend: ollama, litellm, omniroute (default: ${LLM_BACKEND})
+    -m, --model MODEL          Model name (default: ${OLLAMA_MODEL})
+    --url, --proxy URL         Backend server/proxy URL (default: ${OLLAMA_HOST})
+    --api-key, --key KEY       API key for LiteLLM or Omniroute
+    -h, --host HOST            Ollama server URL alias (default: ${OLLAMA_HOST})
+    --num-ctx NUM              Context window size for Ollama (default: ${OLLAMA_NUM_CTX})
 
-    --- Ollama backend (default) ---
-    -m, --model MODEL           Ollama model name (default: ${OLLAMA_MODEL})
-    -h, --host HOST            Ollama server URL (default: ${OLLAMA_HOST})
-        --num-ctx NUM          Context window size for Ollama (default: ${OLLAMA_NUM_CTX})
-
-    --- LiteLLM backend ---
-        --litellm-proxy URL    LiteLLM proxy URL (e.g., http://localhost:4000)
-        --litellm-model MODEL  Model name for LiteLLM proxy
-        --litellm-key KEY      API key for LiteLLM proxy (default: from env)
-
-    --- Omniroute backend ---
-        --omniroute URL        Omniroute proxy URL (default: ${OMNIROUTE_URL})
-        --omniroute-model MODEL Model name for Omniroute proxy
-        --omniroute-key KEY    API key for Omniroute (default: from env)
-
-    --- Shared (all backends) ---
-    --chunk-words WORDS        Target words per chunk (default: ${CHUNK_WORDS})
-    --max-tokens TOKENS        Max tokens per response (default: ${MAX_TOKENS})
-    --temperature TEMP         Temperature for LLM (default: ${TEMPERATURE})
-    --max-retries RETRIES      Max retries per LLM call (default: ${MAX_RETRIES})
-    -l, --language LANG        Target language (ISO 639 code, default: ${TARGET_LANGUAGE})
+CONTENT & OUTPUT OPTIONS:
     --length LENGTH            Summary length: short, medium, long (default: ${SUMMARY_LENGTH})
-    --think                     Enable Ollama think mode
-    -f, --force                 Force regeneration even if cached
-    --testing                   Testing mode: generate output without caching or stats
-    --ignore-processed          Skip videos that have already been processed
+    -l, --language LANG        Target language (ISO 639 code, default: ${TARGET_LANGUAGE})
     --summary-only             Only generate summary section
     --key-points-only          Only generate key points section
     --print-only               Print output to console only
     --save-only                Save output to file only
+    -s, --stats                Show session statistics at the end
     --include-stats            Include session statistics in output document
-    --stats                    Show session statistics at the end
-    --telegram                 Send session statistics as a Telegram message
-    -e, --email EMAIL          Send output to email address (requires sendmail/mail)
+    -e, --email EMAIL          Send output to email address
     --from EMAIL               Sender email address (default: same as --email)
-    --cleanup                  Delete temporary files after processing
-    --transcript-verbose       Show transcript fetching details
+    --telegram                 Send session statistics as a Telegram message
+
+AUDIO (TTS) OPTIONS:
     --audio                    Generate audio from summary
     --audio-output FILE        Output audio file path
     --audio-format FORMAT      Audio format: m4a or mp3 (default: ${AUDIO_FORMAT})
-    --voice VOICE             Explicit voice name (overrides language selection)
-    --tts-engine ENGINE       TTS engine: piper or edge-tts (default: ${TTS_ENGINE})
+    --voice VOICE              Explicit voice name (overrides language selection)
+    --tts-engine ENGINE        TTS engine: piper or edge-tts (default: ${TTS_ENGINE})
+
+PLAYLIST OPTIONS:
     --max-playlist-videos N    Maximum number of videos to process from playlists (0 = no limit)
     --max-playlist-video-age-days D
-                                 Maximum age of videos to process from playlists in days (0 = no limit)
+                               Maximum age of videos to process from playlists in days (0 = no limit)
+
+SYSTEM & CACHE OPTIONS:
+    -f, --force                Force regeneration even if cached
+    --cleanup                  Delete temporary files after processing
     -v, --verbose              Enable verbose/debug output
-    --help                     Show this help message
+    --help                     Show this help summary
+    --help-all                 Show all available options (including legacy/advanced)
+EOF
 
-ENVIRONMENT VARIABLES:
-    All variables below may also be set in a .env file next to the script
-    (see .env.example). Never store secrets in the script itself.
+    if [[ "${SHOW_ALL_HELP:-false}" == "true" ]]; then
+        cat <<EOF
 
-    OLLAMA_HOST              Ollama server URL (overrides -h/--host)
-    OLLAMA_MODEL             Ollama model name (overrides -m/--model)
-    OLLAMA_NUM_CTX           Context window size for Ollama (default: 24000)
-    LLM_BACKEND              LLM backend to use: ollama, litellm, omniroute (default: ollama)
-    CHUNK_WORDS              Target words per chunk
-    MAX_TOKENS               Max tokens per response
-    TEMPERATURE              Temperature for LLM
-    MAX_RETRIES              Max retries per LLM call
-    TARGET_LANGUAGE          Target language (ISO 639 code)
-    SUMMARY_LENGTH           Summary length: short, medium, long
-    USE_LITELLM              Deprecated: set to 'true' to use LiteLLM proxy (use LLM_BACKEND)
-    LITELLM_PROXY_URL        LiteLLM proxy URL
-    LITELLM_MODEL            Model name for LiteLLM proxy
-    LITELLM_API_KEY          API key for LiteLLM proxy authentication
-    USE_OMNIROUTE            Deprecated: set to 'true' to use Omniroute proxy (use LLM_BACKEND)
-    OMNIROUTE_URL            Omniroute proxy URL
-    OMNIROUTE_MODEL          Model name for Omniroute proxy
-    OMNIROUTE_API_KEY        API key for Omniroute authentication
-    CACHE_DIR                Where summaries are cached (default: /tmp/yt-summary-cache)
-    MAX_PLAYLIST_VIDEO_AGE_DAYS
-                             Maximum age of videos to process from playlists in days (0 = no limit)
-    MAX_PLAYLIST_VIDEOS      Maximum number of videos to process from playlists (0 = no limit)
-    TELEGRAM_BOT_TOKEN         Bot token for Telegram API (default: empty, set via env)
-    TELEGRAM_CHAT_ID           Chat ID to send messages to (default: empty, set via env)
-    TELEGRAM_API_URL           Telegram API base URL (default: https://api.telegram.org)
-    TMP_BASE                   Temp directory base
-    EXTERNAL_TRACKING_FILE     Video ID tracking file
-    VOICES_DIR                 Piper TTS voices directory
-    DEFAULT_VOICE_PIPER_EN     Default English piper voice (filename in VOICES_DIR, no .onnx)
-    DEFAULT_VOICE_PIPER_RO     Default Romanian piper voice (filename in VOICES_DIR, no .onnx)
-    DEFAULT_VOICE_TTS_EN       Default English edge-tts voice (voice name)
-    DEFAULT_VOICE_TTS_RO       Default Romanian edge-tts voice (voice name)
+ADVANCED & LEGACY OPTIONS:
+    --think                    Enable Ollama think mode
+    --chunk-words WORDS        Target words per chunk (default: ${CHUNK_WORDS})
+    --max-tokens TOKENS        Max tokens per response (default: ${MAX_TOKENS})
+    --temperature TEMP         Temperature for LLM (default: ${TEMPERATURE})
+    --max-retries RETRIES      Max retries per LLM call (default: ${MAX_RETRIES})
+    --testing                  Testing mode: generate output without caching or stats
+    --ignore-processed        Skip videos that have already been processed
+    --transcript-verbose       Show transcript fetching details
+    --litellm-proxy URL        [Deprecated] Alias for --backend litellm --url URL
+    --litellm-model MODEL      [Deprecated] Alias for --backend litellm --model MODEL
+    --litellm-key KEY          [Deprecated] Alias for --backend litellm --api-key KEY
+    --omniroute URL            [Deprecated] Alias for --backend omniroute --url URL
+    --omniroute-model MODEL    [Deprecated] Alias for --backend omniroute --model MODEL
+    --omniroute-key KEY        [Deprecated] Alias for --backend omniroute --api-key KEY
+EOF
+    fi
+
+    cat <<EOF
 
 EXAMPLES:
     yt-summary "https://www.youtube.com/watch?v=VIDEO_ID"
     yt-summary -m llama3.2:3b --length short urls.txt
-    yt-summary --backend litellm --litellm-model gpt-4o "https://youtube.com/watch?v=ID"
-    yt-summary --backend omniroute --omniroute-model llama3 "https://youtube.com/watch?v=ID"
+    yt-summary --backend litellm --url http://localhost:4000 -m gpt-4o "https://youtube.com/watch?v=ID"
+    yt-summary --backend omniroute -m llama3 "https://youtube.com/watch?v=ID"
     yt-summary --stats "https://www.youtube.com/playlist?list=PLAYLIST_ID"
-    yt-summary --email user@example.com "https://youtube.com/watch?v=ID"
-    yt-summary --cleanup "https://youtube.com/watch?v=ID"
 EOF
 }
 
@@ -409,9 +375,14 @@ parse_args() {
     # Collect arguments, separate options from positional
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -m|--model|--host|--num-ctx|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|--litellm-proxy|--litellm-model|--litellm-key|--omniroute|--omniroute-model|--omniroute-key|-l|--language|--backend)
+            -m|--model|--host|--num-ctx|--url|--proxy|--api-key|--key|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|--litellm-proxy|--litellm-model|--litellm-key|--omniroute|--omniroute-model|--omniroute-key|-l|--language|--backend)
                 args+=("$1" "$2")
                 shift 2
+                ;;
+            --help-all)
+                SHOW_ALL_HELP=true
+                usage
+                exit 0
                 ;;
             --help|-h)
                 usage
@@ -442,8 +413,25 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -m|--model)
+                LLM_MODEL="$2"
                 OLLAMA_MODEL="$2"
+                LITELLM_MODEL="$2"
+                OMNIROUTE_MODEL="$2"
                 CLI_OPT_OLLAMA="true"
+                shift 2
+                ;;
+            --url|--proxy)
+                LLM_URL="$2"
+                OLLAMA_HOST="$2"
+                LITELLM_PROXY_URL="$2"
+                OMNIROUTE_URL="$2"
+                CLI_OPT_OLLAMA="true"
+                shift 2
+                ;;
+            --api-key|--key)
+                LLM_API_KEY="$2"
+                LITELLM_API_KEY="$2"
+                OMNIROUTE_API_KEY="$2"
                 shift 2
                 ;;
             -h|--host)
@@ -457,11 +445,11 @@ parse_args() {
                 shift 2
                 ;;
             --chunk-words)
-                CHUNK_WORDS="${2:-2000}"
+                CHUNK_WORDS="${2:-900}"
                 shift 2
                 ;;
             --max-tokens)
-                MAX_TOKENS="${2:-50000}"
+                MAX_TOKENS="${2:-30000}"
                 shift 2
                 ;;
             --temperature)
@@ -624,13 +612,10 @@ parse_args() {
                 VERBOSE=true
                 shift
                 ;;
-            --testing)
-                TESTING_MODE=true
-                shift
-                ;;
-            --ignore-processed)
-                IGNORE_PROCESSED=true
-                shift
+            --help-all)
+                SHOW_ALL_HELP=true
+                usage
+                exit 0
                 ;;
             --help|-h)
                 usage
@@ -1503,13 +1488,28 @@ main() {
         fi
     fi
 
+    # Resolve unified LLM parameters to backend-specific variables if set
+    if [[ -n "$LLM_URL" ]]; then
+        case "$LLM_BACKEND" in
+            litellm)   LITELLM_PROXY_URL="$LLM_URL" ;;
+            omniroute) OMNIROUTE_URL="$LLM_URL" ;;
+            ollama)    OLLAMA_HOST="$LLM_URL" ;;
+        esac
+    fi
+    if [[ -n "$LLM_API_KEY" ]]; then
+        case "$LLM_BACKEND" in
+            litellm)   LITELLM_API_KEY="$LLM_API_KEY" ;;
+            omniroute) OMNIROUTE_API_KEY="$LLM_API_KEY" ;;
+        esac
+    fi
+
     validate_backend_options "$LLM_BACKEND"
 
     # Resolve effective model for the selected backend
     case "$LLM_BACKEND" in
-        litellm)    LLM_MODEL="${LITELLM_MODEL:-$OLLAMA_MODEL}" ;;
-        omniroute)  LLM_MODEL="${OMNIROUTE_MODEL:-$OLLAMA_MODEL}" ;;
-        *)          LLM_MODEL="$OLLAMA_MODEL" ;;
+        litellm)    LLM_MODEL="${LITELLM_MODEL:-${LLM_MODEL:-$OLLAMA_MODEL}}" ;;
+        omniroute)  LLM_MODEL="${OMNIROUTE_MODEL:-${LLM_MODEL:-$OLLAMA_MODEL}}" ;;
+        *)          LLM_MODEL="${LLM_MODEL:-$OLLAMA_MODEL}" ;;
     esac
     export LLM_MODEL
     
