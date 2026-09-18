@@ -265,15 +265,11 @@ log_info() {
 }
 
 log_warn() {
-    if [[ "$VERBOSE" == "true" ]]; then
-        echo "[WARN] $*" | systemd-cat -p 4 -t yt-summary
-    fi
+    echo "[WARN] $*" | systemd-cat -p 4 -t yt-summary
 }
 
 log_error() {
-    if [[ "$VERBOSE" == "true" ]]; then
-        echo "[ERROR] $*" | systemd-cat -p 4 -t yt-summary
-    fi
+    echo "[ERROR] $*" | systemd-cat -p 4 -t yt-summary
 }
 
 usage() {
@@ -1146,6 +1142,10 @@ $(format_stats_markdown)</pre>"
     output=$(format_output "$title" "$final_summary" "$key_points")
 
     handle_output "$title" "$output"
+    
+    if [[ "$VERBOSE" == "true" ]]; then
+        echo "$output" | systemd-cat -p 4 -t yt-summary
+    fi
     
     # Do not save summary text file when generating audio
     if [[ "$SAVE_OUTPUT" == "true" && "$GENERATE_AUDIO" != "true" ]]; then
