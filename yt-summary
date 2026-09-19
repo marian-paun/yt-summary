@@ -691,7 +691,7 @@ summarize_chunk() {
         if [[ $exit_code -eq 0 ]]; then
             summary="$error_msg"
             
-            log_debug "Chunk response: $summary"
+            log_debug "Chunk response: $(echo "$summary" | wc -w) words"
             
             local word_count
             word_count=$(echo "$summary" | wc -w)
@@ -1142,11 +1142,7 @@ $(format_stats_markdown)</pre>"
     output=$(format_output "$title" "$final_summary" "$key_points")
 
     handle_output "$title" "$output"
-    
-    if [[ "$VERBOSE" == "true" ]]; then
-        echo "$output" | systemd-cat -p 4 -t yt-summary
-    fi
-    
+
     # Do not save summary text file when generating audio
     if [[ "$SAVE_OUTPUT" == "true" && "$GENERATE_AUDIO" != "true" ]]; then
         # Generate checksum for the output content
