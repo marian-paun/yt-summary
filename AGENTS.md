@@ -24,13 +24,39 @@
 ## Architecture
 
 - **Entry point**: `./yt-summary` (1329 lines)
-- **Libraries**: `lib/ollama.sh`, `lib/cache.sh`, `lib/transcript.sh`, `lib/tts.sh`, `lib/omniroute.sh`
+- **Libraries**: `lib/ollama.sh`, `lib/cache.sh`, `lib/transcript.sh`, `lib/tts.sh`, `lib/omniroute.sh`, `lib/whisper.sh`
 - **Pipeline**: fetch transcript → split into chunks → summarize each → merge → extract key points
 
 ## Dependencies
 
 - **Required**: `ollama`, `yt-dlp`, `jq`, `curl`
-- **Optional**: `python3` + `youtube-transcript-api` (fallback transcript fetch), `mail`/`sendmail`/`mutt` (email), `piper-tts` or `edge-tts` (TTS/audio), `ffmpeg` (audio format conversion)
+- **Optional**: `python3` + `youtube-transcript-api` (fallback transcript fetch), `mail`/`sendmail`/`mutt` (email), `piper-tts` or `edge-tts` (TTS/audio), `ffmpeg` (audio format conversion), `whisper-ctranslate2` (transcription fallback), `sshpass` (SSH password auth), `rsync`/`scp` (audio transfer to a remote whisper host)
+
+## Transcription Fallback
+
+When no manual or auto-generated subtitle (RO/EN or any other language) is available, `yt-summary` downloads the audio track and transcribes it with **whisper-ctranslate2** (`lib/whisper.sh`). The whisper engine may run locally (`WHISPER_HOST=localhost`) or on a remote machine reached over SSH (username/password, username/SSH-key, or a `~/.ssh/config` alias). Audio is transferred with rsync, scp, or a shared folder.
+
+The transcript acquisition order in `fetch_transcript_with_fallback()` (`lib/transcript.sh`) is:
+
+1. yt-dlp manual/auto subs (`ro,en`)
+2. yt-dlp any-language subs (summarized **with translation to English** when the source is not RO/EN)
+3. `youtube-transcript-api` manual/auto subs
+4. whisper-ctranslate2 audio transcription (RO/EN audio → transcribe only; other languages → transcribe **and** translate to English, translation feeds the summary)
+
+Long transcriptions are expected (Req 2.8): no timeout is applied to whisper; the process is aborted only on a whisper error/crash or missing output.
+
+| Option | Description |
+|--------|-------------|
+| `--no-whisper` | Disable the whisper transcription fallback |
+| `--whisper-host HOST` | whisper host: `localhost` or remote IP/hostname |
+| `--whisper-model MODEL` | whisper model: `tiny`/`base`/`small`/`medium`/`large-v3` |
+| `--whisper-ssh-user USER` | SSH username on the remote whisper host |
+| `--whisper-ssh-auth AUTH` | SSH auth: `config` \| `key` \| `password` |
+| `--whisper-ssh-key KEY` | SSH key path when `auth=key` |
+| `--whisper-ssh-password PASS` | SSH password when `auth=password` (requires `sshpass`) |
+| `--whisper-transfer MODE` | Audio transfer: `rsync` \| `scp` \| `shared` |
+| `--whisper-remote-dir DIR` | Remote work dir on the whisper host |
+| `--whisper-shared-dir DIR` | Shared folder path when `transfer=shared` |
 
 ## LLM Backends
 
@@ -116,6 +142,17 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `EXTERNAL_TRACKING_FILE` | `/data/ltr/yt-dlp/files` | Video ID tracking file |
 | `MAX_PLAYLIST_VIDEO_AGE_DAYS` | `0` | Max video age for playlists (0 = no limit) |
 | `MAX_PLAYLIST_VIDEOS` | `0` | Max videos per playlist (0 = no limit) |
+| `WHISPER_ENABLED` | `true` | Enable whisper-ctranslate2 fallback (set `false` or use `--no-whisper`) |
+| `WHISPER_HOST` | `localhost` | whisper host: `localhost` or remote IP/hostname |
+| `WHISPER_MODEL` | `medium` | whisper model: tiny/base/small/medium/large-v3 |
+| `WHISPER_BIN` | `whisper-ctranslate2` | Binary name/path (local mode) |
+| `WHISPER_SSH_USER` | *(empty)* | SSH username on the remote whisper host |
+| `WHISPER_SSH_AUTH` | `config` | SSH auth mode: `config` \| `key` \| `password` |
+| `WHISPER_SSH_KEY` | `~/.ssh/id_rsa` | SSH private key path (auth=key) |
+| `WHISPER_SSH_PASSWORD` | *(empty)* | SSH password (auth=password; requires `sshpass`) |
+| `WHISPER_TRANSFER` | `rsync` | Audio transfer: `rsync` \| `scp` \| `shared` |
+| `WHISPER_SHARED_DIR` | *(empty)* | Shared folder path (transfer=shared) |
+| `WHISPER_REMOTE_DIR` | `/tmp/yt-summary-whisper` | Remote work dir on the whisper host |
 
 > [!WARNING]
 > Never add real API keys/tokens to committed files. Keep them in the

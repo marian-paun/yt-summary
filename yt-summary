@@ -206,6 +206,19 @@ fi
 : "${OMNIROUTE_URL:=}"
 : "${OMNIROUTE_MODEL:=}"
 : "${OMNIROUTE_API_KEY:=}"
+
+# --- Whisper fallback configuration (req 2.3, 2.4, 2.5) ---
+: "${WHISPER_ENABLED:=true}"         # Enable/disable whisper-ctranslate2 fallback
+: "${WHISPER_HOST:=localhost}"        # localhost or remote IP/hostname
+: "${WHISPER_SSH_USER:=}"            # SSH username (remote mode)
+: "${WHISPER_SSH_AUTH:=config}"       # SSH auth: config | key | password
+: "${WHISPER_SSH_KEY:=$HOME/.ssh/id_rsa}"  # SSH key path when auth=key
+: "${WHISPER_SSH_PASSWORD:=}"        # SSH password when auth=password (requires sshpass)
+: "${WHISPER_TRANSFER:=rsync}"       # Transfer mode: rsync | scp | shared
+: "${WHISPER_SHARED_DIR:=}"          # Shared folder path (transfer=shared)
+: "${WHISPER_REMOTE_DIR:=/tmp/yt-summary-whisper}"  # Remote work dir (rsync/scp)
+: "${WHISPER_MODEL:=medium}"         # whisper model (tiny/base/small/medium/large-v3)
+: "${WHISPER_BIN:=whisper-ctranslate2}"  # Binary name or path (local mode)
 : "${TTS_ENGINE:=piper}"              # TTS engine: piper or edge-tts
 : "${TELEGRAM_BOT_TOKEN:=}"
 : "${TELEGRAM_CHAT_ID:=}"
@@ -235,8 +248,8 @@ trap cleanup_temp EXIT
 FORCE=false
 INCLUDE_SUMMARY=true
 INCLUDE_KEY_POINTS=true
-PRINT_OUTPUT=false
-SAVE_OUTPUT=false
+PRINT_OUTPUT=true
+SAVE_OUTPUT=true
 VERBOSE=false
 SHOW_STATS=false
 SHOW_STATS_IN_OUTPUT=false
@@ -312,6 +325,21 @@ AUDIO (TTS) OPTIONS:
     --voice VOICE              Explicit voice name (overrides language selection)
     --tts-engine ENGINE        TTS engine: piper or edge-tts (default: ${TTS_ENGINE})
 
+TRANSCRIPTION FALLBACK (WHISPER) OPTIONS:
+    All options below configure the whisper-ctranslate2 fallback, used when no
+    subtitles are available: the audio track is transcribed (locally or via SSH).
+    --no-whisper               Disable the whisper transcription fallback
+    --whisper-host HOST        whisper host: localhost or remote IP/hostname (default: ${WHISPER_HOST})
+    --whisper-model MODEL      whisper model: tiny/base/small/medium/large-v3 (default: ${WHISPER_MODEL})
+    --whisper-ssh-user USER    SSH username on the remote whisper host
+    --whisper-ssh-auth AUTH    SSH auth mode: config | key | password (default: ${WHISPER_SSH_AUTH})
+    --whisper-ssh-key KEY      SSH private key path when auth=key (default: ${WHISPER_SSH_KEY})
+    --whisper-ssh-password PASSWORD
+                               SSH password when auth=password (requires sshpass)
+    --whisper-transfer MODE    Audio transfer: rsync | scp | shared (default: ${WHISPER_TRANSFER})
+    --whisper-remote-dir DIR   Remote work dir on whisper host (default: ${WHISPER_REMOTE_DIR})
+    --whisper-shared-dir DIR   Shared folder path when transfer=shared
+
 PLAYLIST OPTIONS:
     --max-playlist-videos N    Maximum number of videos to process from playlists (0 = no limit)
     --max-playlist-video-age-days D
@@ -371,7 +399,7 @@ parse_args() {
     # Collect arguments, separate options from positional
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -m|--model|--host|--num-ctx|--url|--proxy|--api-key|--key|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|--litellm-proxy|--litellm-model|--litellm-key|--omniroute|--omniroute-model|--omniroute-key|-l|--language|--backend)
+            -m|--model|--host|--num-ctx|--url|--proxy|--api-key|--key|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|--litellm-proxy|--litellm-model|--litellm-key|--omniroute|--omniroute-model|--omniroute-key|-l|--language|--backend|--whisper-host|--whisper-model|--whisper-ssh-user|--whisper-ssh-auth|--whisper-ssh-key|--whisper-ssh-password|--whisper-transfer|--whisper-remote-dir|--whisper-shared-dir)
                 args+=("$1" "$2")
                 shift 2
                 ;;
@@ -604,6 +632,46 @@ parse_args() {
                 CLI_OPT_OMNIROUTE="true"
                 shift 2
                 ;;
+            --whisper-host)
+                WHISPER_HOST="$2"
+                shift 2
+                ;;
+            --whisper-model)
+                WHISPER_MODEL="$2"
+                shift 2
+                ;;
+            --whisper-ssh-user)
+                WHISPER_SSH_USER="$2"
+                shift 2
+                ;;
+            --whisper-ssh-auth)
+                WHISPER_SSH_AUTH="$2"
+                shift 2
+                ;;
+            --whisper-ssh-key)
+                WHISPER_SSH_KEY="$2"
+                shift 2
+                ;;
+            --whisper-ssh-password)
+                WHISPER_SSH_PASSWORD="$2"
+                shift 2
+                ;;
+            --whisper-transfer)
+                WHISPER_TRANSFER="$2"
+                shift 2
+                ;;
+            --whisper-remote-dir)
+                WHISPER_REMOTE_DIR="$2"
+                shift 2
+                ;;
+            --whisper-shared-dir)
+                WHISPER_SHARED_DIR="$2"
+                shift 2
+                ;;
+            --no-whisper)
+                WHISPER_ENABLED=false
+                shift
+                ;;
             -v|--verbose)
                 VERBOSE=true
                 shift
@@ -650,25 +718,35 @@ get_length_profile() {
     esac
 }
 
+# Produces the language instruction for a prompt. Subject is typically
+# "summary" or "key points". Unknown language codes produce no instruction.
+get_lang_instruction() {
+    local language="${1:-en}"
+    local subject="${2:-summary}"
+    local lang_instruction=""
+    case "$language" in
+        ro) lang_instruction="Write the ${subject} in Romanian." ;;
+        en) lang_instruction="Write the ${subject} in English." ;;
+        it) lang_instruction="Write the ${subject} in Italian." ;;
+        es) lang_instruction="Write the ${subject} in Spanish." ;;
+        fr) lang_instruction="Write the ${subject} in French." ;;
+        de) lang_instruction="Write the ${subject} in German." ;;
+        pt) lang_instruction="Write the ${subject} in Portuguese." ;;
+        ja) lang_instruction="Write the ${subject} in Japanese." ;;
+        ko) lang_instruction="Write the ${subject} in Korean." ;;
+        zh) lang_instruction="Write the ${subject} in Chinese." ;;
+        ru) lang_instruction="Write the ${subject} in Russian." ;;
+    esac
+    printf '%s' "$lang_instruction"
+}
+
 summarize_chunk() {
     local chunk_text="$1"
     local chunk_context="$2"
     local language="${3:-en}"
 
-    local lang_instruction=""
-    case "$language" in
-        ro) lang_instruction="Write the summary in Romanian." ;;
-        en) lang_instruction="Write the summary in English." ;;
-        it) lang_instruction="Write the summary in Italian." ;;
-        es) lang_instruction="Write the summary in Spanish." ;;
-        fr) lang_instruction="Write the summary in French." ;;
-        de) lang_instruction="Write the summary in German." ;;
-        pt) lang_instruction="Write the summary in Portuguese." ;;
-        ja) lang_instruction="Write the summary in Japanese." ;;
-        ko) lang_instruction="Write the summary in Korean." ;;
-        zh) lang_instruction="Write the summary in Chinese." ;;
-        ru) lang_instruction="Write the summary in Russian." ;;
-    esac
+    local lang_instruction
+    lang_instruction=$(get_lang_instruction "$language")
 
     local system_prompt="${PROMPT_SYSTEM_CHUNK:-$PROMPT_SYSTEM_CHUNK_DEFAULT}"
 
@@ -676,6 +754,20 @@ summarize_chunk() {
     user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
     user_prompt="${user_prompt//\{\{CHUNK_TEXT\}\}/$(escape_repl "$chunk_text")}"
     user_prompt="${user_prompt//\{\{CHUNK_CONTEXT\}\}/$(escape_repl "$chunk_context")}"
+
+    # Req 2.1: when the transcript is in a non-RO/EN language, the LLM
+    # translates it into English while summarizing.
+    if [[ -n "${TRANSLATE_FROM:-}" ]]; then
+        local translate_note
+        if [[ "$TRANSLATE_FROM" == "unspecified" ]] || [[ "$TRANSLATE_FROM" == "unknown" ]]; then
+            translate_note="Note: the transcript is not in English; translate it into English while summarizing."
+        else
+            translate_note="Note: the transcript is in ${TRANSLATE_FROM}; translate it into English while summarizing."
+        fi
+        user_prompt="${translate_note}
+
+${user_prompt}"
+    fi
 
     local max_attempts=3
     local attempt=0
@@ -750,20 +842,8 @@ aggregate_summary() {
         min_summary_words=20
     fi
 
-    local lang_instruction=""
-    case "$language" in
-        ro) lang_instruction="Write the summary in Romanian." ;;
-        en) lang_instruction="Write the summary in English." ;;
-        it) lang_instruction="Write the summary in Italian." ;;
-        es) lang_instruction="Write the summary in Spanish." ;;
-        fr) lang_instruction="Write the summary in French." ;;
-        de) lang_instruction="Write the summary in German." ;;
-        pt) lang_instruction="Write the summary in Portuguese." ;;
-        ja) lang_instruction="Write the summary in Japanese." ;;
-        ko) lang_instruction="Write the summary in Korean." ;;
-        zh) lang_instruction="Write the summary in Chinese." ;;
-        ru) lang_instruction="Write the summary in Russian." ;;
-    esac
+    local lang_instruction
+    lang_instruction=$(get_lang_instruction "$language")
 
     local system_prompt="${PROMPT_SYSTEM_AGGREGATE:-$PROMPT_SYSTEM_AGGREGATE_DEFAULT}"
 
@@ -825,20 +905,8 @@ generate_key_points() {
     bullet_ranges=$(get_length_profile "$SUMMARY_LENGTH")
     read -r min_bullets max_bullets <<< "$(echo "$bullet_ranges" | tail -1)"
 
-    local lang_instruction=""
-    case "$language" in
-        ro) lang_instruction="Write the key points in Romanian." ;;
-        en) lang_instruction="Write the key points in English." ;;
-        it) lang_instruction="Write the key points in Italian." ;;
-        es) lang_instruction="Write the key points in Spanish." ;;
-        fr) lang_instruction="Write the key points in French." ;;
-        de) lang_instruction="Write the key points in German." ;;
-        pt) lang_instruction="Write the key points in Portuguese." ;;
-        ja) lang_instruction="Write the key points in Japanese." ;;
-        ko) lang_instruction="Write the key points in Korean." ;;
-        zh) lang_instruction="Write the key points in Chinese." ;;
-        ru) lang_instruction="Write the key points in Russian." ;;
-    esac
+    local lang_instruction
+    lang_instruction=$(get_lang_instruction "$language" "key points")
 
     local system_prompt="${PROMPT_SYSTEM_KEYPOINTS:-$PROMPT_SYSTEM_KEYPOINTS_DEFAULT}"
 
@@ -963,6 +1031,7 @@ summarize_video() {
     source "${LIB_DIR}/ollama.sh"
     source "${LIB_DIR}/cache.sh"
     source "${LIB_DIR}/transcript.sh"
+    source "${LIB_DIR}/whisper.sh"
     
     # Re-apply backend overrides after re-sourcing ollama.sh,
     # otherwise ollama_chat would be reset to the local Ollama backend.
@@ -1041,14 +1110,39 @@ summarize_video() {
         log_info "Detected audio language: $audio_lang"
     fi
 
+    TRANSLATE_FROM=""
     log_info "Fetching transcript..."
     local transcript_file
-    transcript_file=$(fetch_transcript "$video_id" "$TRANSCRIPT_LANG")
-    
+    transcript_file=$(fetch_transcript_with_fallback "$url" "$video_id" "$TRANSCRIPT_LANG")
+
     if [[ ! -f "$transcript_file" ]]; then
         log_error "Failed to fetch transcript"
         return 1
     fi
+
+    # fetch_transcript_with_fallback() runs in a subshell above, so read the
+    # source/detected-language markers it persisted for us.
+    if [[ -n "${METADATA_TMP:-}" ]]; then
+        [[ -f "${METADATA_TMP}/${video_id}.transcript_source" ]] && \
+            TRANSCRIPT_SOURCE="$(cat "${METADATA_TMP}/${video_id}.transcript_source")"
+        [[ -f "${METADATA_TMP}/${video_id}.transcript_lang" ]] && \
+            TRANSCRIPT_DETECTED_LANG="$(cat "${METADATA_TMP}/${video_id}.transcript_lang")"
+    fi
+
+    # Req 2.1/2.6: if the transcript source language is neither Romanian nor
+    # English and the user did not explicitly pick a target language, force an
+    # English output (the summary is produced as a translation to English).
+    if [[ "${LANG_EXPLICIT:-false}" != "true" && -n "${TRANSCRIPT_DETECTED_LANG:-}" ]]; then
+        case "$TRANSCRIPT_DETECTED_LANG" in
+            ro|en) ;;
+            *)
+                TRANSLATE_FROM="$TRANSCRIPT_DETECTED_LANG"
+                TARGET_LANGUAGE="en"
+                log_info "Transcript language '${TRANSCRIPT_DETECTED_LANG}' differs from target; summarizing with translation to English"
+                ;;
+        esac
+    fi
+    [[ -n "$TRANSCRIPT_SOURCE" ]] && log_info "Transcript source: $TRANSCRIPT_SOURCE"
     
     local input_words
     input_words=$(get_transcript_word_count "$transcript_file")
@@ -1151,9 +1245,10 @@ $(format_stats_markdown)</pre>"
         cache_write_with_checksum "$video_id" "$output" "$output_checksum"
     fi
     
-    # Add video ID to external tracking file on successful processing
+    # Add video ID to external tracking file on successful processing so the
+    # video is skipped on subsequent runs (regardless of print/save/audio mode).
     # Skip in testing mode
-    if [[ "$SAVE_OUTPUT" == "true" ]] && [[ "${TESTING_MODE:-false}" != "true" ]]; then
+    if [[ "${TESTING_MODE:-false}" != "true" ]]; then
         add_video_id_to_external_file "$video_id"
     fi
     

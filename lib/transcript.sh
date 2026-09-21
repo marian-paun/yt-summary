@@ -1,7 +1,12 @@
 #!/bin/bash
-# lib/transcript.sh - Transcript fetching using yt-dlp
+# lib/transcript.sh - Transcript fetching using yt-dlp with whisper-ctranslate2 fallback
 
 set -euo pipefail
+
+# Global: detected source language of the transcript (for metadata)
+TRANSCRIPT_DETECTED_LANG="${TRANSCRIPT_DETECTED_LANG:-}"
+# Global: where the transcript came from (subtitles | whisper)
+TRANSCRIPT_SOURCE="${TRANSCRIPT_SOURCE:-}"
 
 TRANSCRIPT_TMP="${TMP_BASE}/transcripts"
 METADATA_TMP="${TMP_BASE}/metadata"
@@ -18,6 +23,7 @@ _log_transcript() {
 
 log_transcript_info() { _log_transcript "INFO" "$@"; }
 log_transcript_debug() { _log_transcript "DEBUG" "$@"; }
+log_transcript_warn() { _log_transcript "WARN" "$@"; }
 log_transcript_error() { _log_transcript "ERROR" "$@"; }
 
 _transcript_init() {
@@ -174,7 +180,15 @@ fetch_transcript() {
     fi
     
     log_transcript_debug "Auto subtitles not available via yt-dlp"
-    
+
+    if _fetch_with_yt_dlp_any_sub "$video_id" "$output_file"; then
+        log_transcript_info "Transcript fetched via yt-dlp any-language subtitles"
+        echo "$output_file"
+        return
+    fi
+
+    log_transcript_debug "Any-language subtitles not available via yt-dlp"
+
     if _fetch_with_transcript_api "$video_id" "$lang" "$output_file"; then
         log_transcript_info "Transcript fetched via youtube-transcript-api (manual: $lang)"
         echo "$output_file"
@@ -192,6 +206,55 @@ fetch_transcript() {
     log_transcript_debug "youtube-transcript-api auto subtitles not available"
     log_transcript_error "No subtitles available for video: $video_id"
     return 1
+}
+
+# Multi-tier transcript acquisition (INSTRUCTIONS.md 2.1, 2.3, 2.7):
+#   1. RO/EN subtitles (via fetch_transcript, incl. any-language fallback)
+#   2. audio download + whisper-ctranslate2 transcription
+# On success echoes the transcript text file path. Also persists the source
+# ("subtitles" | "whisper") and detected language to METADATA_TMP marker files
+# keyed by video id — the caller typically runs us inside $() (a subshell), so
+# plain global variables cannot be relied upon for that data.
+fetch_transcript_with_fallback() {
+    local url="$1"
+    local video_id="$2"
+    local lang="${3:-en}"
+
+    TRANSCRIPT_SOURCE=""
+    TRANSCRIPT_DETECTED_LANG=""
+
+    local transcript_file="" src="subtitles" detected=""
+    if transcript_file=$(fetch_transcript "$video_id" "$lang") && [[ -s "$transcript_file" ]]; then
+        src="subtitles"
+        # fetch_transcript only records a language for the any-language tier;
+        # for the normal tiers it is the requested language.
+        detected="${TRANSCRIPT_DETECTED_LANG:-$lang}"
+    else
+        # Whisper transcription fallback (req 2.3).
+        log_transcript_info "No usable subtitles; trying whisper-ctranslate2 transcription..."
+        if declare -f whisper_transcribe >/dev/null 2>&1; then
+            if transcript_file=$(whisper_transcribe "$url" "$video_id") && [[ -s "$transcript_file" ]]; then
+                src="whisper"
+                detected="$(whisper_result_lang "$video_id")"
+            fi
+        else
+            log_transcript_warn "whisper_transcribe() unavailable (lib/whisper.sh not loaded)"
+        fi
+    fi
+
+    if [[ -z "$transcript_file" ]] || [[ ! -s "$transcript_file" ]]; then
+        log_transcript_error "No transcript could be obtained for video: $video_id"
+        return 1
+    fi
+
+    TRANSCRIPT_SOURCE="$src"
+    TRANSCRIPT_DETECTED_LANG="$detected"
+    if [[ -n "${METADATA_TMP:-}" ]]; then
+        mkdir -p "$METADATA_TMP"
+        echo "$src" > "${METADATA_TMP}/${video_id}.transcript_source"
+        echo "$detected" > "${METADATA_TMP}/${video_id}.transcript_lang"
+    fi
+    echo "$transcript_file"
 }
 
 _fetch_with_yt_dlp_subtitles() {
@@ -294,6 +357,80 @@ _fetch_with_yt_dlp_auto_subs() {
             return 0
         fi
     fi
+    rm -rf "$temp_dir"
+    # Clean up stale cache
+    rm -f "$cache_path"
+    return 1
+}
+
+_fetch_with_yt_dlp_any_sub() {
+    local video_id="$1"
+    local output_file="$2"
+
+    local cache_key="${video_id}_any_yt_dlp"
+    local cache_path="${TRANSCRIPT_TMP}/${cache_key}.checksum"
+
+    # Check if we have a cached transcript with the same checksum
+    if [[ -f "$cache_path" ]]; then
+        local cached_checksum
+        cached_checksum=$(cat "$cache_path")
+        local current_checksum
+        current_checksum=$(md5sum "$output_file" 2>/dev/null | awk '{print $1}')
+        if [[ "$cached_checksum" == "$current_checksum" ]]; then
+            log_transcript_info "Using cached any-language transcript (same content)"
+            return 0
+        fi
+        log_transcript_debug "Any-language transcript content changed, re-fetching"
+    fi
+
+    log_transcript_debug "Trying yt-dlp any-language subtitles"
+
+    local temp_dir="${TRANSCRIPT_TMP}/${video_id}_any_temp"
+    mkdir -p "$temp_dir"
+
+    # Fetch all available subtitle and auto-generated subtitles
+    # This includes any language that YouTube provides
+    yt-dlp --write-sub --write-auto-sub --sub-langs "all" \
+        --skip-download --convert-subs srt --no-playlist \
+        --output "${temp_dir}/%(id)s" \
+        "https://youtube.com/watch?v=${video_id}" > /dev/null 2>&1 || true
+
+    # Find the most substantial subtitle file (prefer manual over auto)
+    local sub_file
+    sub_file=$(find "$temp_dir" -name "*-*.srt" -o -name "*-auto*.srt" -o -name "*.ro.srt" -o -name "*.en.srt" 2>/dev/null | head -1)
+
+    # If no specific language found, take any available SRT
+    if [[ -z "$sub_file" ]]; then
+        sub_file=$(find "$temp_dir" -name "*.srt" -o -name "*.vtt" 2>/dev/null | head -1)
+    fi
+
+    if [[ -n "$sub_file" ]] && [[ -f "$sub_file" ]]; then
+        log_transcript_debug "Found any-language subtitle file: $sub_file"
+
+        # Detect the language from the filename suffix (yt-dlp names files
+        # as <id>.<lang>.srt — video IDs are alnum/-/_ so suffix after the
+        # last dot before .srt/.vtt is the language code).
+        local detected_lang="unspecified"
+        detected_lang=$(basename "$sub_file" | sed -E 's/.*\.([A-Za-z0-9_-]+)\.(srt|vtt)$/\1/')
+        # Auto-generated tracks carry a "-orig" style suffix; strip it
+        detected_lang="${detected_lang%%-*}"
+        TRANSCRIPT_DETECTED_LANG="$detected_lang"
+        log_transcript_debug "Detected language: $detected_lang"
+
+        _srt_to_text "$sub_file" > "$output_file"
+        rm -rf "$temp_dir"
+
+        local word_count
+        word_count=$(wc -w < "$output_file")
+        log_transcript_debug "Converted any-language transcript: $word_count words"
+
+        if [[ $word_count -gt 10 ]]; then
+            # Cache the checksum
+            echo "$(md5sum "$output_file" 2>/dev/null | awk '{print $1}')" > "$cache_path"
+            return 0
+        fi
+    fi
+
     rm -rf "$temp_dir"
     # Clean up stale cache
     rm -f "$cache_path"
