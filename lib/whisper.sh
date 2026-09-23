@@ -218,6 +218,24 @@ _whisper_scp() {
     "${scp_args[@]}"
 }
 
+# --- Cleanup --------------------------------------------------------------------
+
+# Cleans up the remote work directory after transcription.
+_whisper_cleanup_remote() {
+    if ! _is_remote; then
+        return 0
+    fi
+    local work_dir="$WHISPER_REMOTE_DIR"
+    if [[ "$WHISPER_TRANSFER" == "shared" ]]; then
+        work_dir="$WHISPER_SHARED_DIR"
+    fi
+    if [[ -z "$work_dir" ]]; then
+        return 0
+    fi
+    _whisper_ssh_setup || return 0
+    _whisper_run_remote "rm -rf $(printf '%q' "$work_dir")" >/dev/null 2>&1 || true
+}
+
 # --- Whisper execution ----------------------------------------------------------
 
 # Runs whisper-ctranslate2 on the given audio path (as seen by the whisper
@@ -474,5 +492,6 @@ whisper_transcribe() {
     echo "$WHISPER_DETECTED_LANG" > "${WHISPER_OUT_DIR}/${video_id}.lang"
 
     whisper_log_info "Whisper transcription complete (language: $WHISPER_DETECTED_LANG)"
+    _whisper_cleanup_remote
     echo "$normalized"
 }

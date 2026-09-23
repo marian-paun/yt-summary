@@ -180,9 +180,9 @@ local total_tokens=$((prompt_tokens + completion_tokens))
         printf '%-14s %14s\n' "Input words:" "$input_words"
         printf '%-14s %14s\n' "Output words:" "$output_words"
         printf '%-14s %14s\n' "Duration:" "$duration_str"
-        printf '=============================\n'
+printf '=============================\n'
     )
-
+    
     
     echo "$stats_output" | systemd-cat -p 4 -t yt-summary
     echo "$stats_output"

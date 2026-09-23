@@ -294,6 +294,12 @@ USAGE:
     yt-summary --help
     yt-summary --help-all
 
+CONFIGURATION:
+    A .env file in the script directory (gitignored) sets all defaults.
+    See .env.example for available options (LLM_BACKEND, CHUNK_WORDS,
+    MAX_TOKENS, SUMMARY_LENGTH, TARGET_LANGUAGE, TTS_ENGINE, etc.).
+    Precedence: CLI flags > environment variables > .env > hard defaults.
+
 TARGET:
     YouTube video URL, playlist URL, or text file containing URLs (one per line)
 
@@ -1294,7 +1300,7 @@ handle_output() {
     local title="$1"
     local output="$2"
     
-    if [[ "$PRINT_OUTPUT" == "true" ]]; then
+    if [[ "$PRINT_OUTPUT" == "true" && "$GENERATE_AUDIO" != "true" ]]; then
         echo ""
         echo "$output"
     fi
