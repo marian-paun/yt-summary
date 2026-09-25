@@ -204,24 +204,24 @@ format_stats_markdown() {
     local stats_output
     stats_output=$(
         printf '\n=============================\n           Session Statistics\n=============================\n'
-        printf '%-20s %14s\n' "Videos:" "$videos"
-        printf '%-20s %14s\n' "LLM requests:" "$requests"
-        printf '%-20s %14s\n' "Prompt tokens:" "$prompt_tokens"
-        printf '%-20s %14s\n' "Compl. Tokens:" "$completion_tokens"
-        printf '%-20s %14s\n' "Total tokens:" "$total_tokens"
-        printf '%-20s %14s\n' "Input words:" "$input_words"
-        printf '%-20s %14s\n' "Output words:" "$output_words"
+        printf '%-20s %8s\n' "Videos:" "$videos"
+        printf '%-20s %8s\n' "LLM requests:" "$requests"
+        printf '%-20s %8s\n' "Prompt tokens:" "$prompt_tokens"
+        printf '%-20s %8s\n' "Compl. Tokens:" "$completion_tokens"
+        printf '%-20s %8s\n' "Total tokens:" "$total_tokens"
+        printf '%-20s %8s\n' "Input words:" "$input_words"
+        printf '%-20s %8s\n' "Output words:" "$output_words"
         if [[ "$ytdlp_ms" -gt 0 ]]; then
-            printf '%-20s %14s\n' "YT-dlp extraction:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
+            printf '%-20s %8s\n' "YT-dlp extraction:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
         fi
         if [[ "$whisper_ms" -gt 0 ]]; then
-            printf '%-20s %14s\n' "Whisper processing:" "$(_fmt_duration "$(( whisper_ms / 1000 ))")"
+            printf '%-20s %8s\n' "Whisper processing:" "$(_fmt_duration "$(( whisper_ms / 1000 ))")"
         fi
-        printf '%-20s %14s\n' "LLM duration:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
+        printf '%-20s %8s\n' "LLM duration:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
         if [[ "$tts_ms" -gt 0 ]]; then
-            printf '%-20s %14s\n' "TTS generation:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
+            printf '%-20s %8s\n' "TTS generation:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
         fi
-        printf '%-20s %14s\n' "Total:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
+        printf '%-20s %8s\n' "Total:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
         printf '=============================\n'
     )
     

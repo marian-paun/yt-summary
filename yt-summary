@@ -1243,12 +1243,13 @@ summarize_video() {
     declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
 
     if [[ "$SEND_TELEGRAM" == "true" ]]; then
-      local esc_title
-      esc_title=$(printf '%s' "$title" | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
+        local esc_title
+        esc_title=$(printf '%s' "$title" | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
+        local telegram_body
+        telegram_body=$(printf 'yt-summary - %s\n%s' "$esc_title" "$(format_stats_markdown)" | fold -s -w 29)
         local t_stats
-        t_stats="<pre>yt-summary - $esc_title
-$(format_stats_markdown)</pre>"
-       send_telegram "$TELEGRAM_CHAT_ID" "$t_stats"
+        printf -v t_stats '<pre>%s\n</pre>' "$telegram_body"
+        send_telegram "$TELEGRAM_CHAT_ID" "$t_stats"
     fi
 
     # Do not save summary text file when generating audio
