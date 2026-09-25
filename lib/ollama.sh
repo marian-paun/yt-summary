@@ -26,7 +26,11 @@ _init_stats() {
   "total_completion_tokens": 0,
   "total_input_words": 0,
   "total_output_words": 0,
-  "total_duration_ms": 0
+  "total_duration_ms": 0,
+  "total_ytdlp_ms": 0,
+  "total_whisper_ms": 0,
+  "total_tts_ms": 0,
+  "total_processing_ms": 0
 }
 EOF
     fi
@@ -42,25 +46,13 @@ _update_stats() {
     
     (
         flock -x 200
-        local current
-        current=$(cat "$STATS_FILE")
-        
-        local new_requests=$(( $(echo "$current" | jq -r '.total_requests') + 1 ))
-        local new_prompt_tokens=$(( $(echo "$current" | jq -r '.total_prompt_tokens') + prompt_eval_count ))
-        local new_completion_tokens=$(( $(echo "$current" | jq -r '.total_completion_tokens') + eval_count ))
-        local new_duration=$(( $(echo "$current" | jq -r '.total_duration_ms') + duration_ms ))
-        
-        cat > "$STATS_FILE" <<EOF
-{
-  "videos_processed": $(echo "$current" | jq -r '.videos_processed'),
-  "total_requests": $new_requests,
-  "total_prompt_tokens": $new_prompt_tokens,
-  "total_completion_tokens": $new_completion_tokens,
-  "total_input_words": $(echo "$current" | jq -r '.total_input_words'),
-  "total_output_words": $(echo "$current" | jq -r '.total_output_words'),
-  "total_duration_ms": $new_duration
-}
-EOF
+        jq --argjson eval_count "$eval_count" --argjson prompt_eval_count "$prompt_eval_count" --argjson duration_ms "$duration_ms" \
+            '.total_requests += 1 |
+             .total_prompt_tokens += $prompt_eval_count |
+             .total_completion_tokens += $eval_count |
+             .total_duration_ms += $duration_ms' \
+            "$STATS_FILE" > "${STATS_FILE}.tmp"
+        mv "${STATS_FILE}.tmp" "$STATS_FILE"
     ) 200>"$STATS_LOCK"
 }
 
@@ -70,21 +62,64 @@ update_video_stats() {
     
     (
         flock -x 200
-        local current
-        current=$(cat "$STATS_FILE")
-        
-        cat > "$STATS_FILE" <<EOF
-{
-  "videos_processed": $(( $(echo "$current" | jq -r '.videos_processed') + 1 )),
-  "total_requests": $(echo "$current" | jq -r '.total_requests'),
-  "total_prompt_tokens": $(echo "$current" | jq -r '.total_prompt_tokens'),
-  "total_completion_tokens": $(echo "$current" | jq -r '.total_completion_tokens'),
-  "total_input_words": $(( $(echo "$current" | jq -r '.total_input_words') + input_words )),
-  "total_output_words": $(( $(echo "$current" | jq -r '.total_output_words') + output_words )),
-  "total_duration_ms": $(echo "$current" | jq -r '.total_duration_ms')
-}
-EOF
+        jq --argjson input_words "$input_words" --argjson output_words "$output_words" \
+            '.videos_processed += 1 |
+             .total_input_words += $input_words |
+             .total_output_words += $output_words' \
+            "$STATS_FILE" > "${STATS_FILE}.tmp"
+        mv "${STATS_FILE}.tmp" "$STATS_FILE"
     ) 200>"$STATS_LOCK"
+}
+
+# Accumulate a wall-clock duration (ms) into the stats file under
+# "total_<tag>_ms". Used for the per-step durations: ytdlp (transcript
+# extraction), whisper processing and tts generation.
+_stats_add_duration() {
+    local tag="$1"
+    local duration_ms="${2:-0}"
+    if [[ "$TESTING_MODE" == "true" ]]; then
+        return 0  # Skip stats update in testing mode
+    fi
+    [[ "$duration_ms" -gt 0 ]] || return 0
+
+    (
+        flock -x 200
+        jq --arg key "total_${tag}_ms" --argjson dur "$duration_ms" \
+            '.[$key] = ((.[$key] // 0) + $dur)' \
+            "$STATS_FILE" > "${STATS_FILE}.tmp"
+        mv "${STATS_FILE}.tmp" "$STATS_FILE"
+    ) 200>"$STATS_LOCK"
+}
+
+# Start/stop a named step timer. Steps are non-nested per video, so a single
+# per-tag start time is enough. Durations land in the session stats file.
+if ! declare -p _STATS_TICS >/dev/null 2>&1; then
+    declare -A _STATS_TICS
+fi
+
+stats_tic() {
+    local tag="$1"
+    _STATS_TICS["$tag"]=$(date +%s%N)
+}
+
+stats_toc() {
+    local tag="$1"
+    local start_ns="${_STATS_TICS[$tag]:-}"
+    if [[ -n "$start_ns" ]]; then
+        local dur_ms=$(( ( $(date +%s%N) - start_ns ) / 1000000 ))
+        _stats_add_duration "$tag" "$dur_ms"
+    fi
+    unset "_STATS_TICS[$tag]"
+    return 0
+}
+
+_fmt_duration() {
+    local sec="${1:-0}"
+    if [[ "$sec" -lt 60 ]]; then
+        printf '%ss' "$sec"
+    else
+        printf '%d min %d sec' "$(( sec / 60 ))" "$(( sec % 60 ))"
+    fi
 }
 
 show_stats() {
@@ -95,7 +130,8 @@ show_stats() {
     local stats
     stats=$(cat "$STATS_FILE")
     
-    local requests prompt_tokens completion_tokens input_words output_words duration_ms videos
+    local requests prompt_tokens completion_tokens input_words output_words \
+        duration_ms videos ytdlp_ms whisper_ms tts_ms processing_ms
     requests=$(echo "$stats" | jq -r '.total_requests')
     prompt_tokens=$(echo "$stats" | jq -r '.total_prompt_tokens')
     completion_tokens=$(echo "$stats" | jq -r '.total_completion_tokens')
@@ -103,18 +139,12 @@ show_stats() {
     output_words=$(echo "$stats" | jq -r '.total_output_words')
     duration_ms=$(echo "$stats" | jq -r '.total_duration_ms')
     videos=$(echo "$stats" | jq -r '.videos_processed')
+    ytdlp_ms=$(echo "$stats" | jq -r '.total_ytdlp_ms // 0')
+    whisper_ms=$(echo "$stats" | jq -r '.total_whisper_ms // 0')
+    tts_ms=$(echo "$stats" | jq -r '.total_tts_ms // 0')
+    processing_ms=$(echo "$stats" | jq -r '.total_processing_ms // 0')
     
     local total_tokens=$((prompt_tokens + completion_tokens))
-    local duration_sec=$((duration_ms / 1000))
-    local minutes=$((duration_sec / 60))
-    local seconds=$((duration_sec % 60))
-
-    local duration_str
-    if [[ "$minutes" -gt 0 ]]; then
-        duration_str="${minutes} min ${seconds} sec"
-    else
-        duration_str="${duration_sec}s"
-    fi
 
     local stats_output
     stats_output=$(
@@ -129,7 +159,17 @@ show_stats() {
         printf "%-20s %s\n" "Total tokens:" "$total_tokens"
         printf "%-20s %s\n" "Input words:" "$input_words"
         printf "%-20s %s\n" "Output words:" "$output_words"
-        printf "%-20s %s\n" "Duration:" "$duration_str"
+        if [[ "$ytdlp_ms" -gt 0 ]]; then
+            printf "%-20s %s\n" "YT-dlp extraction:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
+        fi
+        if [[ "$whisper_ms" -gt 0 ]]; then
+            printf "%-20s %s\n" "Whisper processing:" "$(_fmt_duration "$(( whisper_ms / 1000 ))")"
+        fi
+        printf "%-20s %s\n" "LLM duration:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
+        if [[ "$tts_ms" -gt 0 ]]; then
+            printf "%-20s %s\n" "TTS generation:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
+        fi
+        printf "%-20s %s\n" "Total:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
         echo "========================================"
     )
     
@@ -145,7 +185,8 @@ format_stats_markdown() {
     local stats
     stats=$(cat "$STATS_FILE")
     
-    local requests prompt_tokens completion_tokens input_words output_words duration_ms videos
+    local requests prompt_tokens completion_tokens input_words output_words \
+        duration_ms videos ytdlp_ms whisper_ms tts_ms processing_ms
     requests=$(echo "$stats" | jq -r '.total_requests')
     prompt_tokens=$(echo "$stats" | jq -r '.total_prompt_tokens')
     completion_tokens=$(echo "$stats" | jq -r '.total_completion_tokens')
@@ -153,36 +194,37 @@ format_stats_markdown() {
     output_words=$(echo "$stats" | jq -r '.total_output_words')
     duration_ms=$(echo "$stats" | jq -r '.total_duration_ms')
     videos=$(echo "$stats" | jq -r '.videos_processed')
-    
-local total_tokens=$((prompt_tokens + completion_tokens))
-    local duration_sec=$((duration_ms / 1000))
-    local minutes=$((duration_sec / 60))
-    local seconds=$((duration_sec % 60))
+    ytdlp_ms=$(echo "$stats" | jq -r '.total_ytdlp_ms // 0')
+    whisper_ms=$(echo "$stats" | jq -r '.total_whisper_ms // 0')
+    tts_ms=$(echo "$stats" | jq -r '.total_tts_ms // 0')
+    processing_ms=$(echo "$stats" | jq -r '.total_processing_ms // 0')
 
-    local duration_str
-    if [[ "$minutes" -gt 0 ]]; then
-        duration_str="${minutes} min ${seconds} sec"
-    else
-        duration_str="${duration_sec}s"
-    fi
-
-    local timestamp
-    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local total_tokens=$((prompt_tokens + completion_tokens))
 
     local stats_output
     stats_output=$(
         printf '\n=============================\n           Session Statistics\n=============================\n'
-        printf '%-14s %14s\n' "Videos:" "$videos"
-        printf '%-14s %14s\n' "LLM requests:" "$requests"
-        printf '%-14s %14s\n' "Prompt tokens:" "$prompt_tokens"
-        printf '%-14s %14s\n' "Compl. Tokens:" "$completion_tokens"
-        printf '%-14s %14s\n' "Total tokens:" "$total_tokens"
-        printf '%-14s %14s\n' "Input words:" "$input_words"
-        printf '%-14s %14s\n' "Output words:" "$output_words"
-        printf '%-14s %14s\n' "Duration:" "$duration_str"
+        printf '%-20s %14s\n' "Videos:" "$videos"
+        printf '%-20s %14s\n' "LLM requests:" "$requests"
+        printf '%-20s %14s\n' "Prompt tokens:" "$prompt_tokens"
+        printf '%-20s %14s\n' "Compl. Tokens:" "$completion_tokens"
+        printf '%-20s %14s\n' "Total tokens:" "$total_tokens"
+        printf '%-20s %14s\n' "Input words:" "$input_words"
+        printf '%-20s %14s\n' "Output words:" "$output_words"
+        if [[ "$ytdlp_ms" -gt 0 ]]; then
+            printf '%-20s %14s\n' "YT-dlp extraction:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
+        fi
+        if [[ "$whisper_ms" -gt 0 ]]; then
+            printf '%-20s %14s\n' "Whisper processing:" "$(_fmt_duration "$(( whisper_ms / 1000 ))")"
+        fi
+        printf '%-20s %14s\n' "LLM duration:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
+        if [[ "$tts_ms" -gt 0 ]]; then
+            printf '%-20s %14s\n' "TTS generation:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
+        fi
+        printf '%-20s %14s\n' "Total:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
         printf '=============================\n'
     )
-
+    
     
     echo "$stats_output" | systemd-cat -p 4 -t yt-summary
     echo "$stats_output"

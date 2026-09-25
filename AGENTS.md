@@ -30,7 +30,7 @@
 ## Dependencies
 
 - **Required**: `ollama`, `yt-dlp`, `jq`, `curl`
-- **Optional**: `python3` + `youtube-transcript-api` (fallback transcript fetch), `mail`/`sendmail`/`mutt` (email), `piper-tts` or `edge-tts` (TTS/audio), `ffmpeg` (audio format conversion), `whisper-ctranslate2` (transcription fallback), `sshpass` (SSH password auth), `rsync`/`scp` (audio transfer to a remote whisper host)
+- **Optional**: `python3` + `youtube-transcript-api` (fallback transcript fetch; `pip install --user --break-system-packages youtube-transcript-api` — this is the reliable path when YouTube throttles yt-dlp's caption endpoint with HTTP 429), `mail`/`sendmail`/`mutt` (email), `piper-tts` or `edge-tts` (TTS/audio), `ffmpeg` (audio format conversion), `whisper-ctranslate2` (transcription fallback), `sshpass` (SSH password auth), `rsync`/`scp` (audio transfer to a remote whisper host)
 
 ## Transcription Fallback
 
@@ -39,9 +39,10 @@ When no manual or auto-generated subtitle (RO/EN or any other language) is avail
 The transcript acquisition order in `fetch_transcript_with_fallback()` (`lib/transcript.sh`) is:
 
 1. yt-dlp manual/auto subs (`ro,en`)
-2. yt-dlp any-language subs (summarized **with translation to English** when the source is not RO/EN)
-3. `youtube-transcript-api` manual/auto subs
-4. whisper-ctranslate2 audio transcription (RO/EN audio → transcribe only; other languages → transcribe **and** translate to English, translation feeds the summary)
+2. yt-dlp any-language manual/auto subs (summarized **with translation to English** when the source is not RO/EN)
+3. yt-dlp auto-generated subs (any language; also translated to English when the source is not RO/EN)
+4. `youtube-transcript-api` manual/auto subs (requires the `youtube-transcript-api` python module for `python3`; on Debian install with `pip install --user --break-system-packages youtube-transcript-api`). This tier is the reliable path when YouTube throttles yt-dlp's caption endpoint (HTTP 429) for a video that only has auto-generated captions.
+5. whisper-ctranslate2 audio transcription (RO/EN audio → transcribe only; other languages → transcribe **and** translate to English, translation feeds the summary)
 
 Long transcriptions are expected (Req 2.8): no timeout is applied to whisper; the process is aborted only on a whisper error/crash or missing output.
 
@@ -84,7 +85,7 @@ Unified flags (`-m`/`--model`, `--url`/`--proxy`, `--api-key`/`--key`) work acro
 | `--voice VOICE` | Explicit voice name (overrides language detection) |
 | `--tts-engine ENGINE` | TTS engine: `piper` or `edge-tts` |
 | `--audio-format FORMAT` | Audio format: `m4a` or `mp3` |
-| `--stats` | Show session statistics at end |
+| `--stats` | Show session statistics at end (counts, tokens, and per-video processing durations: YT-dlp extraction → Whisper → LLM duration → TTS → Total) |
 | `--include-stats` | Include statistics in output document |
 
 ## Playlist Processing
@@ -143,6 +144,7 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `MAX_PLAYLIST_VIDEO_AGE_DAYS` | `0` | Max video age for playlists (0 = no limit) |
 | `MAX_PLAYLIST_VIDEOS` | `0` | Max videos per playlist (0 = no limit) |
 | `WHISPER_ENABLED` | `true` | Enable whisper-ctranslate2 fallback (set `false` or use `--no-whisper`) |
+| `YTDLP_COOKIES` | *(empty)* | Path to a yt-dlp cookies file used for subtitle downloads. YouTube throttles the caption endpoint with HTTP 429 for anonymous requests; cookies avoid that so auto-generated subtitles are used instead of falling back to whisper |
 | `WHISPER_HOST` | `localhost` | whisper host: `localhost` or remote IP/hostname |
 | `WHISPER_MODEL` | `medium` | whisper model: tiny/base/small/medium/large-v3 |
 | `WHISPER_BIN` | `whisper-ctranslate2` | Binary name/path (local mode) |

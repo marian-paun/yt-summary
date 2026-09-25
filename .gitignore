@@ -7,3 +7,4 @@ summary/*
 !.env.example
 .opencode*
 .opencode/*
+nohup.out
