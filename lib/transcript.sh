@@ -8,6 +8,25 @@ TRANSCRIPT_DETECTED_LANG="${TRANSCRIPT_DETECTED_LANG:-}"
 # Global: where the transcript came from (subtitles | whisper)
 TRANSCRIPT_SOURCE="${TRANSCRIPT_SOURCE:-}"
 
+# Optional path to a yt-dlp cookies file, used for subtitle downloads to
+# avoid HTTP 429 throttling from YouTube's caption endpoint.
+: "${YTDLP_COOKIES:=}"
+
+# Common yt-dlp flags for subtitle downloads: retries ride out transient
+# HTTP 429s (YouTube throttles the caption endpoint harder than media), and a
+# cookies file avoids the throttling altogether when one is configured.
+_ytdlp_sub_args() {
+    local args=(--retries 5 --fragment-retries 5 --retry-sleep "linear=3::1")
+    if [[ -n "${YTDLP_COOKIES:-}" ]]; then
+        if [[ -f "$YTDLP_COOKIES" ]]; then
+            args+=(--cookies "$YTDLP_COOKIES")
+        else
+            log_transcript_warn "YTDLP_COOKIES file not found: ${YTDLP_COOKIES}"
+        fi
+    fi
+    printf '%s\n' "${args[@]}"
+}
+
 TRANSCRIPT_TMP="${TMP_BASE}/transcripts"
 METADATA_TMP="${TMP_BASE}/metadata"
 : "${MAX_PLAYLIST_VIDEO_AGE_DAYS:=0}"  # 0 means no limit
@@ -159,6 +178,9 @@ fetch_transcript() {
     
     if [[ -f "$output_file" ]]; then
         log_transcript_info "Using cached transcript: $output_file"
+        # Recover the language recorded when the transcript was first fetched
+        # so the English-translation rule still applies on cache hits.
+        [[ -f "${output_file}.lang" ]] && TRANSCRIPT_DETECTED_LANG="$(cat "${output_file}.lang")"
         echo "$output_file"
         return
     fi
@@ -173,14 +195,6 @@ fetch_transcript() {
     
     log_transcript_debug "Manual subtitles not available via yt-dlp"
     
-    if _fetch_with_yt_dlp_auto_subs "$video_id" "$output_file"; then
-        log_transcript_info "Transcript fetched via yt-dlp auto-generated subtitles"
-        echo "$output_file"
-        return
-    fi
-    
-    log_transcript_debug "Auto subtitles not available via yt-dlp"
-
     if _fetch_with_yt_dlp_any_sub "$video_id" "$output_file"; then
         log_transcript_info "Transcript fetched via yt-dlp any-language subtitles"
         echo "$output_file"
@@ -188,6 +202,14 @@ fetch_transcript() {
     fi
 
     log_transcript_debug "Any-language subtitles not available via yt-dlp"
+
+    if _fetch_with_yt_dlp_auto_subs "$video_id" "$output_file"; then
+        log_transcript_info "Transcript fetched via yt-dlp auto-generated subtitles"
+        echo "$output_file"
+        return
+    fi
+    
+    log_transcript_debug "Auto subtitles not available via yt-dlp"
 
     if _fetch_with_transcript_api "$video_id" "$lang" "$output_file"; then
         log_transcript_info "Transcript fetched via youtube-transcript-api (manual: $lang)"
@@ -223,19 +245,28 @@ fetch_transcript_with_fallback() {
     TRANSCRIPT_SOURCE=""
     TRANSCRIPT_DETECTED_LANG=""
 
+    # Stats step timers (defined in lib/ollama.sh when present).
+    _stats_tick() { declare -f stats_tic >/dev/null 2>&1 && { stats_tic "$@"; return 0; }; return 0; }
+    _stats_tock() { declare -f stats_toc >/dev/null 2>&1 && { stats_toc "$@"; return 0; }; return 0; }
+
     local transcript_file="" src="subtitles" detected=""
+    _stats_tick "ytdlp"
     if transcript_file=$(fetch_transcript "$video_id" "$lang") && [[ -s "$transcript_file" ]]; then
+        _stats_tock "ytdlp"
         src="subtitles"
-        # fetch_transcript only records a language for the any-language tier;
-        # for the normal tiers it is the requested language.
         detected="${TRANSCRIPT_DETECTED_LANG:-$lang}"
     else
+        _stats_tock "ytdlp"
         # Whisper transcription fallback (req 2.3).
         log_transcript_info "No usable subtitles; trying whisper-ctranslate2 transcription..."
         if declare -f whisper_transcribe >/dev/null 2>&1; then
+            _stats_tick "whisper"
             if transcript_file=$(whisper_transcribe "$url" "$video_id") && [[ -s "$transcript_file" ]]; then
+                _stats_tock "whisper"
                 src="whisper"
                 detected="$(whisper_result_lang "$video_id")"
+            else
+                _stats_tock "whisper"
             fi
         else
             log_transcript_warn "whisper_transcribe() unavailable (lib/whisper.sh not loaded)"
@@ -257,6 +288,38 @@ fetch_transcript_with_fallback() {
     echo "$transcript_file"
 }
 
+# Prints the best-matching subtitle file in $temp_dir for the given language
+# preference list (first match wins). Manual tracks are preferred over
+# auto-generated ones for the same language; falls back to any subtitle file.
+_pick_subtitle() {
+    local temp_dir="$1"
+    shift
+    local lang
+    for lang in "$@"; do
+        local m
+        m=$(find "$temp_dir" -name "*.${lang}.srt" -o -name "*.${lang}.vtt" 2>/dev/null | head -1)
+        if [[ -n "$m" ]] && [[ -f "$m" ]]; then
+            echo "$m"
+            return 0
+        fi
+        m=$(find "$temp_dir" -name "*.${lang}-*.srt" -o -name "*.${lang}-*.vtt" 2>/dev/null | head -1)
+        if [[ -n "$m" ]] && [[ -f "$m" ]]; then
+            echo "$m"
+            return 0
+        fi
+    done
+    find "$temp_dir" -name "*.srt" -o -name "*.vtt" 2>/dev/null | head -1
+}
+
+# Extracts the language code from a yt-dlp subtitle filename
+# (<id>.<lang>.srt or <id>.<lang>-auto.srt). Strips the "-auto"/"-orig" suffix.
+_subtitle_file_lang() {
+    local sub_file="$1"
+    local lang
+    lang=$(basename "$sub_file" | sed -E 's/.*\.([A-Za-z0-9_-]+)\.(srt|vtt)$/\1/')
+    echo "${lang%%-*}"
+}
+
 _fetch_with_yt_dlp_subtitles() {
     local video_id="$1"
     local lang="$2"
@@ -273,6 +336,7 @@ _fetch_with_yt_dlp_subtitles() {
         current_checksum=$(md5sum "$output_file" 2>/dev/null | awk '{print $1}')
         if [[ "$cached_checksum" == "$current_checksum" ]]; then
             log_transcript_info "Using cached transcript (same content)"
+            [[ -f "${output_file}.lang" ]] && TRANSCRIPT_DETECTED_LANG="$(cat "${output_file}.lang")"
             return 0
         fi
         log_transcript_debug "Transcript content changed, re-fetching"
@@ -283,16 +347,27 @@ _fetch_with_yt_dlp_subtitles() {
     local temp_dir="${TRANSCRIPT_TMP}/${video_id}_manual_temp"
     mkdir -p "$temp_dir"
 
+    # Retries ride out transient HTTP 429s: YouTube throttles the caption
+    # endpoint harder than media downloads, which otherwise silently kills
+    # this tier (and the auto-sub fallbacks) and sends us to whisper.
+    # shellcheck disable=SC2046
     yt-dlp --write-sub --write-auto-sub --sub-langs "${lang},en" \
         --skip-download --convert-subs srt --no-playlist \
+        $(_ytdlp_sub_args) \
         --output "${temp_dir}/%(id)s" \
         "https://youtube.com/watch?v=${video_id}" > /dev/null 2>&1 || true
 
     local sub_file
-    sub_file=$(find "$temp_dir" -name "*.srt" -o -name "*.vtt" 2>/dev/null | head -1)
+    if [[ "$lang" == "en" ]]; then
+        sub_file=$(_pick_subtitle "$temp_dir" "en")
+    else
+        sub_file=$(_pick_subtitle "$temp_dir" "$lang" "en")
+    fi
 
     if [[ -n "$sub_file" ]] && [[ -f "$sub_file" ]]; then
         log_transcript_debug "Found subtitle file: $sub_file"
+        TRANSCRIPT_DETECTED_LANG="$(_subtitle_file_lang "$sub_file")"
+        log_transcript_debug "Detected language: $TRANSCRIPT_DETECTED_LANG"
         _srt_to_text "$sub_file" > "$output_file"
         rm -rf "$temp_dir"
 
@@ -303,6 +378,7 @@ _fetch_with_yt_dlp_subtitles() {
         if [[ $word_count -gt 10 ]]; then
             # Cache the checksum
             echo "$(md5sum "$output_file" 2>/dev/null | awk '{print $1}')" > "$cache_path"
+            echo "$TRANSCRIPT_DETECTED_LANG" > "${output_file}.lang"
             return 0
         fi
     fi
@@ -328,6 +404,7 @@ _fetch_with_yt_dlp_auto_subs() {
         current_checksum=$(md5sum "$output_file" 2>/dev/null | awk '{print $1}')
         if [[ "$cached_checksum" == "$current_checksum" ]]; then
             log_transcript_info "Using cached auto transcript (same content)"
+            [[ -f "${output_file}.lang" ]] && TRANSCRIPT_DETECTED_LANG="$(cat "${output_file}.lang")"
             return 0
         fi
         log_transcript_debug "Auto transcript content changed, re-fetching"
@@ -338,7 +415,9 @@ _fetch_with_yt_dlp_auto_subs() {
     local temp_dir="${TRANSCRIPT_TMP}/${video_id}_auto_temp"
     mkdir -p "$temp_dir"
 
+    # shellcheck disable=SC2046
     yt-dlp --skip-download --write-auto-sub --convert-subs srt \
+        $(_ytdlp_sub_args) \
         --output "${temp_dir}/%(id)s.%(ext)s" \
         "https://youtube.com/watch?v=${video_id}" > /dev/null 2>&1 || true
 
@@ -346,6 +425,8 @@ _fetch_with_yt_dlp_auto_subs() {
     sub_file=$(find "$temp_dir" -name "*.srt" -o -name "*.vtt" -print -quit)
     if [[ -n "$sub_file" ]] && [[ -f "$sub_file" ]]; then
         log_transcript_debug "Found auto-generated subtitle file: $sub_file"
+        TRANSCRIPT_DETECTED_LANG="$(_subtitle_file_lang "$sub_file")"
+        log_transcript_debug "Detected language: $TRANSCRIPT_DETECTED_LANG"
         _srt_to_text "$sub_file" > "$output_file"
         rm -rf "$temp_dir"
         local word_count
@@ -354,6 +435,7 @@ _fetch_with_yt_dlp_auto_subs() {
         if [[ $word_count -gt 10 ]]; then
             # Cache the checksum
             echo "$(md5sum "$output_file" 2>/dev/null | awk '{print $1}')" > "$cache_path"
+            echo "$TRANSCRIPT_DETECTED_LANG" > "${output_file}.lang"
             return 0
         fi
     fi
@@ -378,6 +460,7 @@ _fetch_with_yt_dlp_any_sub() {
         current_checksum=$(md5sum "$output_file" 2>/dev/null | awk '{print $1}')
         if [[ "$cached_checksum" == "$current_checksum" ]]; then
             log_transcript_info "Using cached any-language transcript (same content)"
+            [[ -f "${output_file}.lang" ]] && TRANSCRIPT_DETECTED_LANG="$(cat "${output_file}.lang")"
             return 0
         fi
         log_transcript_debug "Any-language transcript content changed, re-fetching"
@@ -390,32 +473,25 @@ _fetch_with_yt_dlp_any_sub() {
 
     # Fetch all available subtitle and auto-generated subtitles
     # This includes any language that YouTube provides
+    # shellcheck disable=SC2046
     yt-dlp --write-sub --write-auto-sub --sub-langs "all" \
         --skip-download --convert-subs srt --no-playlist \
+        $(_ytdlp_sub_args) \
         --output "${temp_dir}/%(id)s" \
         "https://youtube.com/watch?v=${video_id}" > /dev/null 2>&1 || true
 
-    # Find the most substantial subtitle file (prefer manual over auto)
+    # Find the most substantial subtitle file (prefer manual over auto,
+    # and English/Romanian over arbitrary auto-translated tracks).
     local sub_file
-    sub_file=$(find "$temp_dir" -name "*-*.srt" -o -name "*-auto*.srt" -o -name "*.ro.srt" -o -name "*.en.srt" 2>/dev/null | head -1)
-
-    # If no specific language found, take any available SRT
-    if [[ -z "$sub_file" ]]; then
-        sub_file=$(find "$temp_dir" -name "*.srt" -o -name "*.vtt" 2>/dev/null | head -1)
-    fi
+    sub_file=$(_pick_subtitle "$temp_dir" "en" "ro")
 
     if [[ -n "$sub_file" ]] && [[ -f "$sub_file" ]]; then
         log_transcript_debug "Found any-language subtitle file: $sub_file"
 
         # Detect the language from the filename suffix (yt-dlp names files
-        # as <id>.<lang>.srt — video IDs are alnum/-/_ so suffix after the
-        # last dot before .srt/.vtt is the language code).
-        local detected_lang="unspecified"
-        detected_lang=$(basename "$sub_file" | sed -E 's/.*\.([A-Za-z0-9_-]+)\.(srt|vtt)$/\1/')
-        # Auto-generated tracks carry a "-orig" style suffix; strip it
-        detected_lang="${detected_lang%%-*}"
-        TRANSCRIPT_DETECTED_LANG="$detected_lang"
-        log_transcript_debug "Detected language: $detected_lang"
+        # as <id>.<lang>.srt or <id>.<lang>-auto.srt).
+        TRANSCRIPT_DETECTED_LANG="$(_subtitle_file_lang "$sub_file")"
+        log_transcript_debug "Detected language: $TRANSCRIPT_DETECTED_LANG"
 
         _srt_to_text "$sub_file" > "$output_file"
         rm -rf "$temp_dir"
@@ -424,9 +500,10 @@ _fetch_with_yt_dlp_any_sub() {
         word_count=$(wc -w < "$output_file")
         log_transcript_debug "Converted any-language transcript: $word_count words"
 
-        if [[ $word_count -gt 10 ]]; then
+if [[ $word_count -gt 10 ]]; then
             # Cache the checksum
             echo "$(md5sum "$output_file" 2>/dev/null | awk '{print $1}')" > "$cache_path"
+            echo "$TRANSCRIPT_DETECTED_LANG" > "${output_file}.lang"
             return 0
         fi
     fi
@@ -444,7 +521,7 @@ _fetch_with_transcript_api() {
     
     log_transcript_debug "Trying youtube-transcript-api (manual: $lang)"
     
-    python3 - - "$video_id" "$lang" "$output_file" <<'PYEOF'
+    python3 - "$video_id" "$lang" "$output_file" <<'PYEOF'
 import sys
 sys.argv.pop(0)
 video_id = sys.argv[0]
@@ -454,11 +531,17 @@ output_file = sys.argv[2]
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
 
-    transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+    # youtube-transcript-api >= 1.0 replaced the class-level list_transcripts()
+    # with an instance-level list(); both expose the same Transcript shape.
+    api = YouTubeTranscriptApi()
+    if hasattr(api, 'list'):
+        transcript_list = api.list(video_id)
+    else:
+        transcript_list = api.list_transcripts(video_id)
 
     try:
         transcript = transcript_list.find_transcript([lang, 'en'])
-    except:
+    except Exception:
         transcript = transcript_list.find_transcript(['en'])
 
     if transcript:
@@ -471,17 +554,25 @@ try:
                     f.write(text + ' ')
                     last_text = text
 
+        # Record the actual track language for the English-translation rule.
+        with open(output_file + '.lang', 'w') as lf:
+            lf.write((transcript.language_code or lang).split('-')[0] or 'en')
+
         import os
         if os.path.getsize(output_file) > 10:
             sys.exit(0)
-except Exception as e:
+except Exception:
     pass
 
 sys.exit(1)
 
 PYEOF
 
-    [[ -s "$output_file" ]] && [[ $(wc -c < "$output_file") -gt 10 ]]
+    if [[ -s "$output_file" ]] && [[ $(wc -c < "$output_file") -gt 10 ]]; then
+        TRANSCRIPT_DETECTED_LANG="$(cat "${output_file}.lang" 2>/dev/null || echo "$lang")"
+        return 0
+    fi
+    return 1
 }
 
 _fetch_with_transcript_api_auto() {
@@ -490,7 +581,7 @@ _fetch_with_transcript_api_auto() {
     
     log_transcript_debug "Trying youtube-transcript-api (auto-generated)"
     
-    python3 - - "$video_id" "$output_file" <<'PYEOF'
+    python3 - "$video_id" "$output_file" <<'PYEOF'
 import sys
 sys.argv.pop(0)
 video_id = sys.argv[0]
@@ -499,7 +590,13 @@ output_file = sys.argv[1]
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
 
-    transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+    # youtube-transcript-api >= 1.0 replaced the class-level list_transcripts()
+    # with an instance-level list(); both expose the same Transcript shape.
+    api = YouTubeTranscriptApi()
+    if hasattr(api, 'list'):
+        transcript_list = api.list(video_id)
+    else:
+        transcript_list = api.list_transcripts(video_id)
 
     auto_transcripts = []
     for transcript in transcript_list:
@@ -520,19 +617,27 @@ try:
                 f.write(text + ' ')
                 last_text = text
 
+    # Record the actual track language for the English-translation rule.
+    with open(output_file + '.lang', 'w') as lf:
+        lf.write((transcript.language_code or 'en').split('-')[0] or 'en')
+
     import os
     if os.path.getsize(output_file) > 10:
         print(f"Using auto transcript (language: {transcript.language_code})", file=sys.stderr)
         sys.exit(0)
 
-except Exception as e:
+except Exception:
     pass
 
 sys.exit(1)
 
 PYEOF
 
-    [[ -s "$output_file" ]] && [[ $(wc -c < "$output_file") -gt 10 ]]
+    if [[ -s "$output_file" ]] && [[ $(wc -c < "$output_file") -gt 10 ]]; then
+        TRANSCRIPT_DETECTED_LANG="$(cat "${output_file}.lang" 2>/dev/null || echo "en")"
+        return 0
+    fi
+    return 1
 }
 
 _srt_to_text() {

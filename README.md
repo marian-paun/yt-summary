@@ -36,7 +36,7 @@ By default, `yt-summary` is local-first and privacy-friendly when used with Olla
 - **Email output**: Send summaries directly to email.
 - **Telegram notifications**: Receive session statistics via Telegram bot.
 - **Think mode**: Enable Ollama's extended thinking for deeper analysis.
-- **Session statistics**: Track tokens, words, and processing time.
+- **Session statistics**: Track tokens, words, and per-stage processing durations (transcript extraction → Whisper → LLM → TTS) with a per-video total.
 - **External tracking**: Integrates with yt-dlp download tracking.
 
 ## 🧠 How it works
@@ -44,7 +44,7 @@ By default, `yt-summary` is local-first and privacy-friendly when used with Olla
 At a high level, `yt-summary` follows a simple pipeline:
 
 1. Resolve the input target (video, playlist, or file).
-2. Fetch the YouTube transcript in the requested language, with fallback and translation when needed.
+2. Fetch the YouTube transcript: native RO/EN subtitles first, then any-language or auto-generated subtitles (translated to English when not RO/EN), `youtube-transcript-api`, and finally whisper-ctranslate2 transcription.
 3. Split the transcript into word-based chunks.
 4. Summarize each chunk independently.
 5. Merge chunk summaries into a coherent narrative.

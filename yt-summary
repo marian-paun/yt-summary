@@ -1084,7 +1084,12 @@ summarize_video() {
         done <<< "$videos"
         return
     fi
-    
+
+    # Per-video timers for session statistics. "processing" spans from the moment
+    # processing of this video URL starts until the final step completes
+    # (summary text sent, or audio file generated for --audio).
+    declare -f stats_tic >/dev/null 2>&1 && stats_tic "processing" || true
+
     local title
     title=$(get_video_title "$url")
     log_info "Video title: $title"
@@ -1102,6 +1107,7 @@ summarize_video() {
             cached=$(cache_read "$video_id")
             handle_output "$title" "$cached"
         fi
+        declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
         return
     fi
     
@@ -1227,21 +1233,23 @@ summarize_video() {
     # Update session statistics before generating the final markdown output
     update_video_stats "$input_words" "$output_words"
 
-    if [[ "$SEND_TELEGRAM" == "true" ]]; then
-      local esc_title
-      esc_title=$(printf '%s' "$title" | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
-        local t_stats
-#        t_stats="yt-summary - $title
-#$(format_stats_markdown)"
-        t_stats="<pre>yt-summary - $esc_title
-$(format_stats_markdown)</pre>"
-       send_telegram "$TELEGRAM_CHAT_ID" "$t_stats"
-    fi
-
     local output
     output=$(format_output "$title" "$final_summary" "$key_points")
 
     handle_output "$title" "$output"
+
+    # Stop the per-video total timer now that the final step completed
+    # (output summary sent, or audio file generated for --audio).
+    declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
+
+    if [[ "$SEND_TELEGRAM" == "true" ]]; then
+      local esc_title
+      esc_title=$(printf '%s' "$title" | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
+        local t_stats
+        t_stats="<pre>yt-summary - $esc_title
+$(format_stats_markdown)</pre>"
+       send_telegram "$TELEGRAM_CHAT_ID" "$t_stats"
+    fi
 
     # Do not save summary text file when generating audio
     if [[ "$SAVE_OUTPUT" == "true" && "$GENERATE_AUDIO" != "true" ]]; then
@@ -1352,7 +1360,9 @@ handle_output() {
             fi
         fi
 
+        declare -f stats_tic >/dev/null 2>&1 && stats_tic "tts" || true
         generate_audio "$output" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"
+        declare -f stats_toc >/dev/null 2>&1 && stats_toc "tts" || true
     fi
 }
 
@@ -1424,7 +1434,7 @@ send_mqtt() {
         return 0
     fi
 
-    local mqtt_args=(-h "$MQTT_BROKER" -t "$MQTT_TOPIC" -m "$payload" -q 0)
+    local mqtt_args=(-h "$MQTT_BROKER" -t "$MQTT_TOPIC" -m "$payload" -q 0 -r)
 
     if [[ -n "$MQTT_USER" ]]; then
         mqtt_args+=(-u "$MQTT_USER")
@@ -1459,6 +1469,10 @@ send_mqtt_stats() {
         --argjson total_input_words "$(echo "$stats" | jq -r '.total_input_words')" \
         --argjson total_output_words "$(echo "$stats" | jq -r '.total_output_words')" \
         --argjson total_duration_ms "$(echo "$stats" | jq -r '.total_duration_ms')" \
+        --argjson total_ytdlp_ms "$(echo "$stats" | jq -r '.total_ytdlp_ms // 0')" \
+        --argjson total_whisper_ms "$(echo "$stats" | jq -r '.total_whisper_ms // 0')" \
+        --argjson total_tts_ms "$(echo "$stats" | jq -r '.total_tts_ms // 0')" \
+        --argjson total_processing_ms "$(echo "$stats" | jq -r '.total_processing_ms // 0')" \
         '{
             timestamp: $timestamp,
             videos_processed: $videos_processed,
@@ -1467,8 +1481,14 @@ send_mqtt_stats() {
             total_completion_tokens: $total_completion_tokens,
             total_input_words: $total_input_words,
             total_output_words: $total_output_words,
-            total_duration_ms: $total_duration_ms
+            total_duration_ms: $total_duration_ms,
+            total_ytdlp_ms: $total_ytdlp_ms,
+            total_whisper_ms: $total_whisper_ms,
+            total_tts_ms: $total_tts_ms,
+            total_processing_ms: $total_processing_ms
         }')
+
+    log_info "MQTT stats payload: $(printf '%s' "$payload" | jq -c .)"
 
     send_mqtt "$payload"
 }
