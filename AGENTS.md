@@ -80,13 +80,14 @@ Unified flags (`-m`/`--model`, `--url`/`--proxy`, `--api-key`/`--key`) work acro
 | `--print-only` | Print to console only, don't save to file |
 | `--save-only` | Save to file only, don't print to console |
 | `--email EMAIL` | Send output via email (requires sendmail/mail/mutt) |
-| `--telegram` | Send session stats via Telegram |
+| `--telegram` | Send per-video statistics via Telegram (one message after each video) |
 | `--audio` | Generate audio from summary |
 | `--voice VOICE` | Explicit voice name (overrides language detection) |
 | `--tts-engine ENGINE` | TTS engine: `piper` or `edge-tts` |
 | `--audio-format FORMAT` | Audio format: `m4a` or `mp3` |
 | `--stats` | Show session statistics at end (counts, tokens, and per-video processing durations: YT-dlp extraction → Whisper → LLM duration → TTS → Total) |
-| `--include-stats` | Include statistics in output document |
+| `--include-stats` | Include per-video statistics in output document (the final `--stats` block stays cumulative for the whole session) |
+| `--no-auto-chunk` | Disable the LLM chunk-size recommendation (use configured `CHUNK_WORDS`) |
 
 ## Playlist Processing
 
@@ -109,6 +110,7 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `OLLAMA_NUM_CTX` | `24000` | Ollama context window |
 | `LLM_BACKEND` | `ollama` | Backend: `ollama`, `litellm`, or `omniroute` |
 | `CHUNK_WORDS` | `900` | Words per transcript chunk |
+| `AUTO_CHUNK` | `true` | Ask the LLM for the recommended chunk size before summarizing (`false` = always use `CHUNK_WORDS`; an explicit `--chunk-words` flag also disables it) |
 | `MAX_TOKENS` | `30000` | Max tokens per LLM response |
 | `TEMPERATURE` | `0.1` | LLM temperature |
 | `MAX_RETRIES` | `5` | LLM retries |
@@ -117,6 +119,7 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `PROMPT_SYSTEM_CHUNK` / `PROMPT_USER_CHUNK` | *(defaults)* | Chunk-summarization prompts |
 | `PROMPT_SYSTEM_AGGREGATE` / `PROMPT_USER_AGGREGATE` | *(defaults)* | Merge prompts |
 | `PROMPT_SYSTEM_KEYPOINTS` / `PROMPT_USER_KEYPOINTS` | *(defaults)* | Key-points prompts |
+| `PROMPT_SYSTEM_CHUNKSIZE` / `PROMPT_USER_CHUNKSIZE` | *(defaults)* | Chunk-size recommendation prompts (placeholders: `{{INPUT_WORDS}}`, `{{DEFAULT_CHUNK_WORDS}}`) |
 | `CACHE_DIR` | `/tmp/yt-summary-cache` | Where summaries are cached |
 | `USE_LITELLM` | `false` | Deprecated: use `LLM_BACKEND=litellm` |
 | `LITELLM_PROXY_URL` | *(empty)* | LiteLLM proxy URL |

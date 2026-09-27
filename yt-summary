@@ -99,7 +99,8 @@ load_env_file
 # Placeholders replaced at use time:
 #   {{LANG}}, {{CHUNK_TEXT}}, {{CHUNK_CONTEXT}}, {{MIN_SUMMARY_WORDS}},
 #   {{LENGTH_GUIDANCE}}, {{CHUNK_SUMMARIES}}, {{MIN_BULLETS}},
-#   {{MAX_BULLETS}}, {{FINAL_SUMMARY}}
+#   {{MAX_BULLETS}}, {{FINAL_SUMMARY}}, {{INPUT_WORDS}},
+#   {{DEFAULT_CHUNK_WORDS}}
 PROMPT_SYSTEM_CHUNK_DEFAULT="You are an expert summarizer specializing in video transcripts. Produce clear, accurate summaries that capture the essential information, incliuding sufficient details for a correct understanding of the summarized text. Output plain text only — no markdown, no quotes, no prefixes."
 
 PROMPT_USER_CHUNK_DEFAULT=$(cat <<'PROMPT_EOC'
@@ -167,6 +168,17 @@ Source material:
 PROMPT_EOK
 )
 
+PROMPT_SYSTEM_CHUNKSIZE_DEFAULT="You recommend chunk sizes for map-reduce summarization of video transcripts. Given the transcript word count, reply with the recommended number of words per chunk. Output ONLY a positive integer — no prose, no units, no explanation."
+
+PROMPT_USER_CHUNKSIZE_DEFAULT=$(cat <<'PROMPT_EOCS'
+Transcript word count: {{INPUT_WORDS}}
+Default chunk size: {{DEFAULT_CHUNK_WORDS}} words per chunk.
+
+Recommend the optimal words-per-chunk value for summarizing this transcript, balancing context-window limits against summary quality and merge overhead.
+Output only the number.
+PROMPT_EOCS
+)
+
 # Escape a value for literal use inside ${var//pattern/replacement}.
 # Bash interprets '&' (matched pattern) and backslashes in the replacement;
 # sed builds the escaped form so injected transcript/summary text stays literal
@@ -179,6 +191,7 @@ escape_repl() {
 : "${OLLAMA_MODEL:=gemma2:2b}"
 : "${OLLAMA_NUM_CTX:=24000}"
 : "${CHUNK_WORDS:=900}"
+: "${AUTO_CHUNK:=true}"              # Ask the LLM for a recommended chunk size before summarizing
 : "${MAX_TOKENS:=30000}"
 : "${TEMPERATURE:=0.1}"
 : "${MAX_RETRIES:=5}"
@@ -319,10 +332,10 @@ CONTENT & OUTPUT OPTIONS:
     --print-only               Print output to console only
     --save-only                Save output to file only
     -s, --stats                Show session statistics at the end
-    --include-stats            Include session statistics in output document
+    --include-stats            Include per-video statistics in output document
     -e, --email EMAIL          Send output to email address
     --from EMAIL               Sender email address (default: same as --email)
-    --telegram                 Send session statistics as a Telegram message
+    --telegram                 Send per-video statistics as a Telegram message
 
 AUDIO (TTS) OPTIONS:
     --audio                    Generate audio from summary
@@ -353,6 +366,7 @@ PLAYLIST OPTIONS:
 
 SYSTEM & CACHE OPTIONS:
     -f, --force                Force regeneration even if cached
+    --no-auto-chunk            Disable the LLM chunk-size recommendation (use CHUNK_WORDS)
     --cleanup                  Delete temporary files after processing
     -v, --verbose              Enable verbose/debug output
     --help                     Show this help summary
@@ -364,7 +378,8 @@ EOF
 
 ADVANCED & LEGACY OPTIONS:
     --think                    Enable Ollama think mode
-    --chunk-words WORDS        Target words per chunk (default: ${CHUNK_WORDS})
+    --chunk-words WORDS        Target words per chunk (default: ${CHUNK_WORDS}; disables auto chunk size)
+    --auto-chunk / AUTO_CHUNK  Ask the LLM for recommended chunk size before summarizing (default: ${AUTO_CHUNK})
     --max-tokens TOKENS        Max tokens per response (default: ${MAX_TOKENS})
     --temperature TEMP         Temperature for LLM (default: ${TEMPERATURE})
     --max-retries RETRIES      Max retries per LLM call (default: ${MAX_RETRIES})
@@ -476,6 +491,8 @@ parse_args() {
                 ;;
             --chunk-words)
                 CHUNK_WORDS="${2:-900}"
+                # An explicit CLI chunk size overrides the auto recommendation
+                AUTO_CHUNK=false
                 shift 2
                 ;;
             --max-tokens)
@@ -678,6 +695,10 @@ parse_args() {
                 WHISPER_ENABLED=false
                 shift
                 ;;
+            --no-auto-chunk)
+                AUTO_CHUNK=false
+                shift
+                ;;
             -v|--verbose)
                 VERBOSE=true
                 shift
@@ -778,16 +799,20 @@ ${user_prompt}"
     local max_attempts=3
     local attempt=0
     local summary=""
-    local error_msg=""
+    local llm_response=""
+    # stderr goes to a file (never merged into the response): only the model's
+    # stdout may become the summary — 2>&1 would also capture debug traces or
+    # warnings and pollute the summarized content
+    local llm_err_file="${TMP_BASE}/llm_stderr.err"
     
     while [[ $attempt -lt $max_attempts ]]; do
         log_debug "Summarizing chunk (attempt $((attempt + 1))/$max_attempts)"
         
-        error_msg=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>&1)
+        llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
         local exit_code=$?
         
         if [[ $exit_code -eq 0 ]]; then
-            summary="$error_msg"
+            summary="$llm_response"
             
             log_debug "Chunk response: $(echo "$summary" | wc -w) words"
             
@@ -804,7 +829,7 @@ ${user_prompt}"
             
             log_warn "Chunk summary too short (${word_count} words, expected >= ${min_words}), retrying..."
         else
-            log_warn "Chunk summarization failed: ${error_msg}"
+            log_warn "Chunk summarization failed: $(cat "$llm_err_file" 2>/dev/null || true)"
         fi
         
         attempt=$((attempt + 1))
@@ -865,16 +890,18 @@ aggregate_summary() {
     local max_attempts=3
     local attempt=0
     local summary=""
-    local error_msg=""
+    local llm_response=""
+    # stderr to file — see summarize_chunk: never merge it into the summary
+    local llm_err_file="${TMP_BASE}/llm_stderr.err"
     
     while [[ $attempt -lt $max_attempts ]]; do
         log_debug "Aggregating summary (attempt $((attempt + 1))/$max_attempts)"
         
-        error_msg=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>&1)
+        llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
         local exit_code=$?
         
         if [[ $exit_code -eq 0 ]]; then
-            summary="$error_msg"
+            summary="$llm_response"
             
             local word_count
             word_count=$(echo "$summary" | wc -w)
@@ -886,7 +913,7 @@ aggregate_summary() {
             
             log_warn "Aggregate summary too short (${word_count} words, expected >= ${min_summary_words}), retrying..."
         else
-            log_warn "Aggregation failed: ${error_msg}"
+            log_warn "Aggregation failed: $(cat "$llm_err_file" 2>/dev/null || true)"
         fi
         
         attempt=$((attempt + 1))
@@ -929,16 +956,18 @@ generate_key_points() {
     local max_attempts=3
     local attempt=0
     local key_points=""
-    local error_msg=""
+    local llm_response=""
+    # stderr to file — see summarize_chunk: never merge it into the key points
+    local llm_err_file="${TMP_BASE}/llm_stderr.err"
     
     while [[ $attempt -lt $max_attempts ]]; do
         log_debug "Generating key points (attempt $((attempt + 1))/$max_attempts)"
         
-        error_msg=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>&1)
+        llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
         local exit_code=$?
         
         if [[ $exit_code -eq 0 ]]; then
-            key_points="$error_msg"
+            key_points="$llm_response"
             
             local line_count
             line_count=$(echo "$key_points" | grep -c "^- " || true)
@@ -951,7 +980,7 @@ generate_key_points() {
             
             log_warn "No valid key points generated, retrying..."
         else
-            log_warn "Key points generation failed: ${error_msg}"
+            log_warn "Key points generation failed: $(cat "$llm_err_file" 2>/dev/null || true)"
         fi
         
         attempt=$((attempt + 1))
@@ -964,6 +993,59 @@ generate_key_points() {
     fi
     
     log_error "Failed to generate key points after ${max_attempts} attempts"
+    return 1
+}
+
+# Asks the LLM for the recommended words-per-chunk value, given the transcript
+# word count. Echoes a positive integer on success. Returns 1 when no valid
+# answer could be obtained (LLM error, empty or non-numeric reply) so the
+# caller can fall back to the configured CHUNK_WORDS.
+recommend_chunk_words() {
+    local input_words="$1"
+    local default_words="${2:-$CHUNK_WORDS}"
+
+    local system_prompt="${PROMPT_SYSTEM_CHUNKSIZE:-$PROMPT_SYSTEM_CHUNKSIZE_DEFAULT}"
+    local user_prompt="${PROMPT_USER_CHUNKSIZE:-$PROMPT_USER_CHUNKSIZE_DEFAULT}"
+    user_prompt="${user_prompt//\{\{INPUT_WORDS\}\}/$(escape_repl "$input_words")}"
+    user_prompt="${user_prompt//\{\{DEFAULT_CHUNK_WORDS\}\}/$(escape_repl "$default_words")}"
+
+    local max_attempts=3
+    local attempt=0
+    # stderr is captured to a file, never merged into the response: only the
+    # model's stdout may be parsed for the number (2>&1 would also capture
+    # debug traces/warnings whose digits could be mistaken for the answer)
+    local stderr_file="${TMP_BASE}/chunksize_recommend_$$.err"
+
+    while [[ $attempt -lt $max_attempts ]]; do
+        log_debug "Requesting chunk-size recommendation (attempt $((attempt + 1))/$max_attempts)"
+
+        local response=""
+        local error_output=""
+        response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$stderr_file")
+        local exit_code=$?
+        error_output=$(cat "$stderr_file" 2>/dev/null || true)
+
+        if [[ $exit_code -eq 0 ]]; then
+            local recommended
+            recommended=$(printf '%s' "$response" | grep -oE '[0-9]+' | head -1 || true)
+            if [[ -n "$recommended" ]]; then
+                # 10# avoids octal interpretation of values like 0900
+                recommended=$((10#$recommended))
+                if [[ $recommended -gt 0 ]]; then
+                    rm -f "$stderr_file"
+                    echo "$recommended"
+                    return 0
+                fi
+            fi
+            log_warn "No valid chunk-size recommendation in response: ${response:0:120}"
+        else
+            log_warn "Chunk-size recommendation failed: ${error_output:-$response}"
+        fi
+
+        attempt=$((attempt + 1))
+    done
+
+    rm -f "$stderr_file"
     return 1
 }
 
@@ -1048,6 +1130,10 @@ summarize_video() {
     fi
     
     init_stats
+    # Per-video reports (Telegram message, --include-stats document) show only
+    # this video's stats (current minus snapshot); the final --stats block
+    # keeps showing cumulative session totals.
+    stats_snapshot
     
     cache_init
     
@@ -1086,8 +1172,8 @@ summarize_video() {
     fi
 
     # Per-video timers for session statistics. "processing" spans from the moment
-    # processing of this video URL starts until the final step completes
-    # (summary text sent, or audio file generated for --audio).
+    # processing of this video URL starts until summarization and statistics
+    # collection complete (just before the output document is rendered).
     declare -f stats_tic >/dev/null 2>&1 && stats_tic "processing" || true
 
     local title
@@ -1160,9 +1246,20 @@ summarize_video() {
     input_words=$(get_transcript_word_count "$transcript_file")
     log_info "Transcript: ${input_words} words"
     
-    log_info "Splitting transcript into chunks..."
+    local effective_chunk_words="$CHUNK_WORDS"
+    if [[ "$AUTO_CHUNK" == "true" ]]; then
+        local recommended_chunk_words=""
+        if recommended_chunk_words=$(recommend_chunk_words "$input_words"); then
+            effective_chunk_words="$recommended_chunk_words"
+            log_info "LLM recommended chunk size: ${effective_chunk_words} words (configured: ${CHUNK_WORDS})"
+        else
+            log_warn "No chunk-size recommendation from LLM; using configured CHUNK_WORDS=${CHUNK_WORDS}"
+        fi
+    fi
+    
+    log_info "Splitting transcript into chunks (target ${effective_chunk_words} words per chunk)..."
     local chunks_dir
-    chunks_dir=$(split_transcript "$transcript_file" "$CHUNK_WORDS" "$video_id")
+    chunks_dir=$(split_transcript "$transcript_file" "$effective_chunk_words" "$video_id")
     
     local chunk_count
     chunk_count=$(ls -1 "${chunks_dir}"/chunk_*.txt 2>/dev/null | wc -l)
@@ -1207,6 +1304,10 @@ summarize_video() {
             # Single chunk: use the chunk summary directly without redundant aggregation
             final_summary=$(sed '/^\[Chunk 1\]$/d; /^---$/d' "$mapped_chunks_file" | sed '/^[[:space:]]*$/d')
         else
+            local length_profile
+            length_profile=$(get_length_profile "$SUMMARY_LENGTH")
+            local length_guidance
+            length_guidance=$(echo "$length_profile" | head -1)
             log_info "Aggregating chunk summaries..."
             if ! final_summary=$(aggregate_summary "$mapped_chunks_file" "$chunk_count" "$length_guidance" "$TARGET_LANGUAGE"); then
                 log_error "Failed to aggregate summary"
@@ -1226,27 +1327,35 @@ summarize_video() {
         fi
     fi
 
-    # Calculate output size before updating stats so the markdown includes the right numbers
+    # Output words = words of the summarization text (the summary; the key
+    # points when produced without a summary, e.g. --key-points-only).
+    # Calculated before updating stats so the markdown includes the right numbers.
+    local summarization_text="$final_summary"
+    if [[ -z "$summarization_text" ]]; then
+        summarization_text="$key_points"
+    fi
     local output_words
-    output_words=$(echo "$(format_output "$title" "$final_summary" "$key_points")" | wc -w)
+    output_words=$(printf '%s' "$summarization_text" | wc -w)
 
     # Update session statistics before generating the final markdown output
     update_video_stats "$input_words" "$output_words"
+
+    # Stop the per-video timer before the document is rendered so the embedded
+    # --include-stats block shows this video's completed processing time
+    # (delivery is excluded; audio generation has its own TTS timer and still
+    # appears in the Telegram message sent after delivery).
+    declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
 
     local output
     output=$(format_output "$title" "$final_summary" "$key_points")
 
     handle_output "$title" "$output"
 
-    # Stop the per-video total timer now that the final step completed
-    # (output summary sent, or audio file generated for --audio).
-    declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
-
     if [[ "$SEND_TELEGRAM" == "true" ]]; then
         local esc_title
         esc_title=$(printf '%s' "$title" | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
         local telegram_body
-        telegram_body=$(printf 'yt-summary - %s\n%s' "$esc_title" "$(format_stats_markdown)" | fold -s -w 29)
+        telegram_body=$(printf 'yt-summary - %s\n%s' "$esc_title" "$(format_stats_markdown video)" | fold -s -w 29)
         local t_stats
         printf -v t_stats '<pre>%s\n</pre>' "$telegram_body"
         send_telegram "$TELEGRAM_CHAT_ID" "$t_stats"
@@ -1297,7 +1406,7 @@ ${key_points}"
     
     if [[ "$SHOW_STATS_IN_OUTPUT" == "true" ]]; then
         local stats_md
-        stats_md=$(format_stats_markdown)
+        stats_md=$(format_stats_markdown video)
         output+="
 ${stats_md}"
     fi

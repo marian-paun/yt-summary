@@ -71,6 +71,34 @@ update_video_stats() {
     ) 200>"$STATS_LOCK"
 }
 
+# Snapshot the session stats at the start of a video. Per-video reports
+# (Telegram message, --include-stats document) then show only that video's
+# contribution (current minus snapshot), while the end-of-run --stats block
+# keeps showing cumulative session totals.
+stats_snapshot() {
+    [[ -f "$STATS_FILE" ]] || return 0
+    cp "$STATS_FILE" "${STATS_FILE}.snapshot"
+}
+
+# Print current stats minus the last snapshot (every numeric field).
+_stats_delta() {
+    jq -s '
+        .[0] as $s | .[1] as $c |
+        {
+            videos_processed:    ($c.videos_processed    - $s.videos_processed),
+            total_requests:      ($c.total_requests      - $s.total_requests),
+            total_prompt_tokens: ($c.total_prompt_tokens - $s.total_prompt_tokens),
+            total_completion_tokens: ($c.total_completion_tokens - $s.total_completion_tokens),
+            total_input_words:   ($c.total_input_words   - $s.total_input_words),
+            total_output_words:  ($c.total_output_words  - $s.total_output_words),
+            total_duration_ms:   ($c.total_duration_ms   - $s.total_duration_ms),
+            total_ytdlp_ms:      ($c.total_ytdlp_ms      - $s.total_ytdlp_ms),
+            total_whisper_ms:    ($c.total_whisper_ms    - $s.total_whisper_ms),
+            total_tts_ms:        ($c.total_tts_ms        - $s.total_tts_ms),
+            total_processing_ms: ($c.total_processing_ms - $s.total_processing_ms)
+        }' "${STATS_FILE}.snapshot" "$STATS_FILE"
+}
+
 # Accumulate a wall-clock duration (ms) into the stats file under
 # "total_<tag>_ms". Used for the per-step durations: ytdlp (transcript
 # extraction), whisper processing and tts generation.
@@ -178,12 +206,19 @@ show_stats() {
 }
 
 format_stats_markdown() {
+    # scope "video" = this video's stats only (current minus snapshot);
+    # default "session" = cumulative totals for the whole run.
+    local scope="${1:-session}"
     if [[ ! -f "$STATS_FILE" ]]; then
         return
     fi
     
     local stats
-    stats=$(cat "$STATS_FILE")
+    if [[ "$scope" == "video" && -f "${STATS_FILE}.snapshot" ]]; then
+        stats=$(_stats_delta)
+    else
+        stats=$(cat "$STATS_FILE")
+    fi
     
     local requests prompt_tokens completion_tokens input_words output_words \
         duration_ms videos ytdlp_ms whisper_ms tts_ms processing_ms

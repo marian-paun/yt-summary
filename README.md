@@ -121,6 +121,10 @@ SUMMARY_LENGTH=medium
 
 # Chunk size (words)
 CHUNK_WORDS=900
+
+# Ask the LLM for the recommended chunk size before summarizing.
+# false = always use CHUNK_WORDS (same effect as --no-auto-chunk).
+AUTO_CHUNK=true
 ```
 
 ### Prompt Templates
@@ -140,6 +144,7 @@ replaced at use time:
 | `{{CHUNK_SUMMARIES}}` | aggregate, key points |
 | `{{MIN_BULLETS}}`, `{{MAX_BULLETS}}` | key points |
 | `{{FINAL_SUMMARY}}` | key points |
+| `{{INPUT_WORDS}}`, `{{DEFAULT_CHUNK_WORDS}}` | chunk size |
 
 Templates are:
 `PROMPT_SYSTEM_CHUNK`, `PROMPT_USER_CHUNK`, `PROMPT_SYSTEM_AGGREGATE`,
