@@ -168,14 +168,11 @@ Source material:
 PROMPT_EOK
 )
 
-PROMPT_SYSTEM_CHUNKSIZE_DEFAULT="You recommend chunk sizes for map-reduce summarization of video transcripts. Given the transcript word count, reply with the recommended number of words per chunk. Output ONLY a positive integer — no prose, no units, no explanation."
+PROMPT_SYSTEM_CHUNKSIZE_DEFAULT="I will ask you to perform summarization of video transcripts. If your context window will allow it I will submit the whole text for summarization, if not I will submit in chunks, for a map-reduce summarization. Given the transcript word count, and your context window reply with the recommended number of words you can process. Output ONLY a positive integer — no prose, no units, no explanation. Do not iterate too much, return your best guess."
 
 PROMPT_USER_CHUNKSIZE_DEFAULT=$(cat <<'PROMPT_EOCS'
 Transcript word count: {{INPUT_WORDS}}
-Default chunk size: {{DEFAULT_CHUNK_WORDS}} words per chunk.
-
-Recommend the optimal words-per-chunk value for summarizing this transcript, balancing context-window limits against summary quality and merge overhead.
-Output only the number.
+Language: {{LANG}}
 PROMPT_EOCS
 )
 
@@ -1355,7 +1352,10 @@ summarize_video() {
         local esc_title
         esc_title=$(printf '%s' "$title" | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
         local telegram_body
-        telegram_body=$(printf 'yt-summary - %s\n%s' "$esc_title" "$(format_stats_markdown video)" | fold -s -w 29)
+        # Only the title is wrapped: the statistics block is pre-formatted for
+        # a 29-column <pre> block, so folding it would break its alignment.
+        telegram_body=$(printf 'yt-summary - %s' "$esc_title" | fold -s -w 29)
+        telegram_body=$(printf '%s\n%s' "$telegram_body" "$(format_stats_markdown video)")
         local t_stats
         printf -v t_stats '<pre>%s\n</pre>' "$telegram_body"
         send_telegram "$TELEGRAM_CHAT_ID" "$t_stats"

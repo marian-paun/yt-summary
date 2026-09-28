@@ -145,8 +145,10 @@ _fmt_duration() {
     local sec="${1:-0}"
     if [[ "$sec" -lt 60 ]]; then
         printf '%ss' "$sec"
-    else
+    elif [[ "$sec" -lt 3600 ]]; then
         printf '%d min %d sec' "$(( sec / 60 ))" "$(( sec % 60 ))"
+    else
+        printf '%dh %dm %ds' "$(( sec / 3600 ))" "$(( (sec % 3600) / 60 ))" "$(( sec % 60 ))"
     fi
 }
 
@@ -237,26 +239,29 @@ format_stats_markdown() {
     local total_tokens=$((prompt_tokens + completion_tokens))
 
     local stats_output
+    # Every line must stay <= 29 columns: the Telegram message is sent inside a
+    # <pre> block and a longer line wraps and destroys the column alignment.
+    # Labels are padded to 14 and values right-aligned in 14 (14 + 1 + 14 = 29).
     stats_output=$(
         printf '\n=============================\n           Session Statistics\n=============================\n'
-        printf '%-20s %8s\n' "Videos:" "$videos"
-        printf '%-20s %8s\n' "LLM requests:" "$requests"
-        printf '%-20s %8s\n' "Prompt tokens:" "$prompt_tokens"
-        printf '%-20s %8s\n' "Compl. Tokens:" "$completion_tokens"
-        printf '%-20s %8s\n' "Total tokens:" "$total_tokens"
-        printf '%-20s %8s\n' "Input words:" "$input_words"
-        printf '%-20s %8s\n' "Output words:" "$output_words"
+        printf '%-14s %14s\n' "Videos:" "$videos"
+        printf '%-14s %14s\n' "LLM requests:" "$requests"
+        printf '%-14s %14s\n' "Prompt tokens:" "$prompt_tokens"
+        printf '%-14s %14s\n' "Compl. Tokens:" "$completion_tokens"
+        printf '%-14s %14s\n' "Total tokens:" "$total_tokens"
+        printf '%-14s %14s\n' "Input words:" "$input_words"
+        printf '%-14s %14s\n' "Output words:" "$output_words"
         if [[ "$ytdlp_ms" -gt 0 ]]; then
-            printf '%-20s %8s\n' "YT-dlp extraction:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
+            printf '%-14s %14s\n' "YT-dlp time:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
         fi
         if [[ "$whisper_ms" -gt 0 ]]; then
-            printf '%-20s %8s\n' "Whisper processing:" "$(_fmt_duration "$(( whisper_ms / 1000 ))")"
+            printf '%-14s %14s\n' "Whisper time:" "$(_fmt_duration "$(( whisper_ms / 1000 ))")"
         fi
-        printf '%-20s %8s\n' "LLM duration:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
+        printf '%-14s %14s\n' "LLM time:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
         if [[ "$tts_ms" -gt 0 ]]; then
-            printf '%-20s %8s\n' "TTS generation:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
+            printf '%-14s %14s\n' "TTS time:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
         fi
-        printf '%-20s %8s\n' "Total:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
+        printf '%-14s %14s\n' "Total time:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
         printf '=============================\n'
     )
     
