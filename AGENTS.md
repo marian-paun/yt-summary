@@ -65,15 +65,30 @@ Long transcriptions are expected (Req 2.8): no timeout is applied to whisper; th
 
 ## LLM Backends
 
-Three backends are supported via `--backend` or `LLM_BACKEND` env var:
+Four backends are supported via `--backend` or `LLM_BACKEND` env var:
 
 | Backend | Description | Options |
 |---------|-------------|---------|
 | `ollama` | local backend | `-m`/`--model`, `--url`/`-h`, `--num-ctx`, `--think` |
 | `litellm` | LiteLLM proxy (cloud models) | `--backend litellm`, `-m`/`--model`, `--url`/`--proxy`, `--api-key` |
 | `omniroute` | default Omniroute proxy (model routing) | `--backend omniroute`, `-m`/`--model`, `--url`/`--proxy`, `--api-key` |
+| `fallback` | cascading fallback: Omniroute → Ollama Cloud → Ollama Local | `--backend fallback`, `OLLAMA_CLOUD_API_KEYS`, `OLLAMA_CLOUD_URL`, `OLLAMA_CLOUD_MODEL`, `OLLAMA_LOCAL_MODEL` |
 
 Unified flags (`-m`/`--model`, `--url`/`--proxy`, `--api-key`/`--key`) work across all backends. Legacy backend flags (`--litellm-proxy`, `--omniroute`, `--litellm-model`, etc.) remain supported as backward-compatible aliases.
+
+### Fallback Backend
+
+The `fallback` backend implements a cascading fallback strategy:
+1. **Omniroute** (primary) - Try first with configured `OMNIROUTE_*` options
+2. **Ollama Cloud** (secondary) - Try if Omniroute fails; supports multiple API keys in priority order via `OLLAMA_CLOUD_API_KEYS` (comma-separated)
+3. **Ollama Local** (tertiary) - Try if all Ollama Cloud keys fail; uses local Ollama at `localhost:11434` with `OLLAMA_LOCAL_MODEL`
+4. **Abort** - If all three fail, abort the request
+
+Configuration via `.env`:
+- `OLLAMA_CLOUD_API_KEYS` - Comma-separated list of 1-3 API keys
+- `OLLAMA_CLOUD_URL` - Ollama Cloud API base URL (default: `https://api.ollama.cloud`)
+- `OLLAMA_CLOUD_MODEL` - Model name for Ollama Cloud
+- `OLLAMA_LOCAL_MODEL` - Model name for local Ollama (default: `gemma2:2b`)
 
 ## Output Options
 

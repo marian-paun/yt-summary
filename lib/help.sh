@@ -83,7 +83,7 @@ TARGET:
   YouTube video URL, playlist URL, or a text file containing URLs (one per line)
 
 BACKEND & MODEL OPTIONS:
-  --backend BACKEND          LLM backend: ollama, litellm, omniroute (default: ${LLM_BACKEND})
+  --backend BACKEND          LLM backend: ollama, litellm, omniroute, fallback (default: ${LLM_BACKEND})
   -m, --model MODEL          Model name (default: ${OLLAMA_MODEL})
   --url, --proxy URL         Backend server/proxy URL (default: ${OLLAMA_HOST})
   --api-key, --key KEY       API key for LiteLLM or Omniroute
@@ -235,6 +235,20 @@ EOF
     "CLI: -m, --model MODEL"
   env_entry OMNIROUTE_API_KEY "$(env_show_secret OMNIROUTE_API_KEY)" \
     "Omniroute API key" "CLI: --api-key KEY"
+
+  cat <<EOF
+
+  --- LLM backend: Fallback cascade (LLM_BACKEND=fallback) ---
+  Tries Omniroute first, then Ollama Cloud (multi-key), then Ollama Local.
+EOF
+  env_entry OLLAMA_CLOUD_API_KEYS "$(env_show_secret OLLAMA_CLOUD_API_KEYS)" \
+    "Comma-separated Ollama Cloud API keys (1-3), tried in order"
+  env_entry OLLAMA_CLOUD_URL "$(env_show OLLAMA_CLOUD_URL)" \
+    "Ollama Cloud API base URL (OpenAI-compatible)"
+  env_entry OLLAMA_CLOUD_MODEL "$(env_show OLLAMA_CLOUD_MODEL)" \
+    "Model name for Ollama Cloud"
+  env_entry OLLAMA_LOCAL_MODEL "$(env_show OLLAMA_LOCAL_MODEL)" \
+    "Model name for local Ollama (last resort)"
 
   cat <<EOF
 

@@ -217,6 +217,12 @@ fi
 : "${OMNIROUTE_MODEL:=}"
 : "${OMNIROUTE_API_KEY:=}"
 
+# --- Fallback backend configuration ---
+: "${OLLAMA_CLOUD_API_KEYS:=}"         # Comma-separated list of Ollama Cloud API keys
+: "${OLLAMA_CLOUD_URL:=https://api.ollama.cloud}"  # Ollama Cloud API base URL
+: "${OLLAMA_CLOUD_MODEL:=}"            # Model name for Ollama Cloud
+: "${OLLAMA_LOCAL_MODEL:=gemma2:2b}"   # Model name for local Ollama (last resort)
+
 # --- Whisper fallback configuration (req 2.3, 2.4, 2.5) ---
 : "${WHISPER_ENABLED:=true}"         # Enable/disable whisper-ctranslate2 fallback
 : "${WHISPER_HOST:=localhost}"        # localhost or remote IP/hostname
@@ -548,13 +554,13 @@ parse_args() {
           ;;
       --backend)
           case "$2" in
-            ollama|litellm|omniroute)
+            ollama|litellm|omniroute|fallback)
                 LLM_BACKEND="$2"
                 LLM_BACKEND_FROM_CLI="true"
                 ;;
             *)
                 usage_error "invalid value '$2' for '$1'" \
-                  "must be one of: ollama, litellm, omniroute"
+                  "must be one of: ollama, litellm, omniroute, fallback"
                 exit 1
                 ;;
             esac
@@ -1676,6 +1682,13 @@ main() {
     }
   elif [[ "$LLM_BACKEND" == "litellm" ]]; then
     log_info "Using LiteLLM backend: $LITELLM_PROXY_URL with model: $LLM_MODEL"
+  elif [[ "$LLM_BACKEND" == "fallback" ]]; then
+    log_info "Using Fallback backend: Omniroute -> Ollama Cloud -> Ollama Local"
+    source "${LIB_DIR}/fallback.sh"
+
+    ollama_chat() {
+      fallback_chat "$@"
+    }
   else
     # Ollama mode - perform Ollama checks
     ollama_check
