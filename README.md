@@ -85,6 +85,17 @@ At a high level, `yt-summary` follows a simple pipeline:
 ## 🔧 Configuration
 
 Configure via environment variables or a `.env` file in the same directory as the script.
+`.env.example` is a template covering every supported option; CLI flags take
+precedence over environment variables, which take precedence over `.env`.
+
+```bash
+# Full option list (short)
+./yt-summary --help
+
+# Everything: advanced/legacy options + every .env variable with its
+# current effective value
+./yt-summary --help-all
+```
 
 ### LLM Backend Options
 
@@ -240,6 +251,9 @@ When using Ollama, all processing happens locally—no data leaves your machine.
 
 # Show help
 ./yt-summary --help
+
+# Show advanced/legacy options and the full .env reference
+./yt-summary --help-all
 
 # Check transcript extraction
 yt-dlp --print title --print description <url>

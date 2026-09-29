@@ -253,8 +253,14 @@ AUDIO_OUTPUT=""
 : "${DEFAULT_VOICE_TTS_RO:=ro-RO-AlinaNeural}"
 : "${EXTERNAL_TRACKING_FILE:=}"
 
-TMP_BASE=$(mktemp -d -p /temp/ yt-summary-XXXX)
-CACHE_DIR=${TMP_BASE}/yt-summary-cache
+TMP_BASE_OWNED=false
+if [[ -n "${TMP_BASE:-}" ]]; then
+  mkdir -p "$TMP_BASE"
+else
+  TMP_BASE=$(mktemp -d -p /temp/ yt-summary-XXXX)
+  TMP_BASE_OWNED=true
+fi
+: "${CACHE_DIR:=/tmp/yt-summary-cache}"
 trap cleanup_temp EXIT
 
 FORCE=false
@@ -270,12 +276,14 @@ EMAIL_TO=""
 : "${EMAIL_FROM:=}"
 TESTING_MODE=false
 IGNORE_PROCESSED=false
-SHOW_ALL_HELP=false
 
 # Track which backend-specific CLI options were explicitly passed
 CLI_OPT_OLLAMA=""
 CLI_OPT_LITELLM=""
 CLI_OPT_OMNIROUTE=""
+
+# Help/usage output (synopsis, options, advanced, .env reference)
+source "${LIB_DIR}/help.sh"
 
 log_debug() {
   if [[ "$VERBOSE" == "true" ]]; then
@@ -297,119 +305,40 @@ log_error() {
   echo "[ERROR] $*" | systemd-cat -p 4 -t yt-summary
 }
 
-usage() {
-  cat <<EOF
-yt-summary - YouTube video summarizer using Ollama/LiteLLM/Omniroute
+# Help output (synopsis / options / advanced / .env reference) lives in
+# lib/help.sh; see usage() there.
 
-USAGE:
-  yt-summary [options] <target>
-  yt-summary --help
-  yt-summary --help-all
+# Command-line diagnostics go to stderr so they stay visible in the terminal,
+# unlike log_*() which writes to the systemd journal.
+cli_error() {
+  printf 'yt-summary: error: %s\n' "$*" >&2
+}
 
-CONFIGURATION:
-  A .env file in the script directory (gitignored) sets all defaults.
-  See .env.example for available options (LLM_BACKEND, CHUNK_WORDS,
-  MAX_TOKENS, SUMMARY_LENGTH, TARGET_LANGUAGE, TTS_ENGINE, etc.).
-  Precedence: CLI flags > environment variables > .env > hard defaults.
+cli_warn() {
+  printf 'yt-summary: warning: %s\n' "$*" >&2
+}
 
-TARGET:
-  YouTube video URL, playlist URL, or text file containing URLs (one per line)
+# Bad invocation: report the problem, then the synopsis (not the full help,
+# which would bury the error) plus a pointer to --help.
+usage_error() {
+  cli_error "$1"
+  shift
+  while [[ $# -gt 0 ]]; do
+    printf 'yt-summary: %s\n' "$*" >&2
+    shift
+  done
+  usage short >&2
+  cat >&2 <<'EOF'
 
-BACKEND & MODEL OPTIONS:
-  --backend BACKEND          LLM backend: ollama, litellm, omniroute (default: ${LLM_BACKEND})
-  -m, --model MODEL          Model name (default: ${OLLAMA_MODEL})
-  --url, --proxy URL         Backend server/proxy URL (default: ${OLLAMA_HOST})
-  --api-key, --key KEY       API key for LiteLLM or Omniroute
-  -h, --host HOST            Ollama server URL alias (default: ${OLLAMA_HOST})
-  --num-ctx NUM              Context window size for Ollama (default: ${OLLAMA_NUM_CTX})
-
-CONTENT & OUTPUT OPTIONS:
-  --length LENGTH            Summary length: short, medium, long (default: ${SUMMARY_LENGTH})
-  -l, --language LANG        Target language (ISO 639 code, default: ${TARGET_LANGUAGE})
-  --summary-only             Only generate summary section
-  --key-points-only          Only generate key points section
-  --print-only               Print output to console only
-  --save-only                Save output to file only
-  -s, --stats                Show session statistics at the end
-  --include-stats            Include per-video statistics in output document
-  -e, --email EMAIL          Send output to email address
-  --from EMAIL               Sender email address (default: same as --email)
-  --telegram                 Send per-video statistics as a Telegram message
-
-AUDIO (TTS) OPTIONS:
-  --audio                    Generate audio from summary
-  --audio-output FILE        Output audio file path
-  --audio-format FORMAT      Audio format: m4a or mp3 (default: ${AUDIO_FORMAT})
-  --voice VOICE              Explicit voice name (overrides language selection);
-                              for piper also accepts a filename in VOICES_DIR or a path to a .onnx file
-  --tts-engine ENGINE        TTS engine: piper or edge-tts (default: ${TTS_ENGINE});
-                              edge-tts falls back to piper when it cannot reach the service
-
-TRANSCRIPTION FALLBACK (WHISPER) OPTIONS:
-  All options below configure the whisper-ctranslate2 fallback, used when no
-  subtitles are available: the audio track is transcribed (locally or via SSH).
-  --no-whisper               Disable the whisper transcription fallback
-  --whisper-host HOST        whisper host: localhost or remote IP/hostname (default: ${WHISPER_HOST})
-  --whisper-model MODEL      whisper model: tiny/base/small/medium/large-v3 (default: ${WHISPER_MODEL})
-  --whisper-ssh-user USER    SSH username on the remote whisper host
-  --whisper-ssh-auth AUTH    SSH auth mode: config | key | password (default: ${WHISPER_SSH_AUTH})
-  --whisper-ssh-key KEY      SSH private key path when auth=key (default: ${WHISPER_SSH_KEY})
-  --whisper-ssh-password PASSWORD
-                             SSH password when auth=password (requires sshpass)
-  --whisper-transfer MODE    Audio transfer: rsync | scp | shared (default: ${WHISPER_TRANSFER})
-  --whisper-remote-dir DIR   Remote work dir on whisper host (default: ${WHISPER_REMOTE_DIR})
-  --whisper-shared-dir DIR   Shared folder path when transfer=shared
-
-PLAYLIST OPTIONS:
-  --max-playlist-videos N    Maximum number of videos to process from playlists (0 = no limit)
-  --max-playlist-video-age-days D
-                             Maximum age of videos to process from playlists in days (0 = no limit)
-
-SYSTEM & CACHE OPTIONS:
-  -f, --force                Force regeneration even if cached
-  --no-auto-chunk            Disable the LLM chunk-size recommendation (use CHUNK_WORDS)
-  --cleanup                  Delete temporary files after processing
-  -v, --verbose              Enable verbose/debug output
-  --help                     Show this help summary
-  --help-all                 Show all available options (including legacy/advanced)
-EOF
-
-  if [[ "${SHOW_ALL_HELP:-false}" == "true" ]]; then
-    cat <<EOF
-
-ADVANCED & LEGACY OPTIONS:
-  --think                    Enable Ollama think mode
-  --chunk-words WORDS        Target words per chunk (default: ${CHUNK_WORDS}; disables auto chunk size)
-  --auto-chunk / AUTO_CHUNK  Ask the LLM for recommended chunk size before summarizing (default: ${AUTO_CHUNK})
-  --max-tokens TOKENS        Max tokens per response (default: ${MAX_TOKENS})
-  --temperature TEMP         Temperature for LLM (default: ${TEMPERATURE})
-  --max-retries RETRIES      Max retries per LLM call (default: ${MAX_RETRIES})
-  --testing                  Testing mode: generate output without caching or stats
-  --ignore-processed        Skip videos that have already been processed
-  --transcript-verbose       Show transcript fetching details
-  --litellm-proxy URL        [Deprecated] Alias for --backend litellm --url URL
-  --litellm-model MODEL      [Deprecated] Alias for --backend litellm --model MODEL
-  --litellm-key KEY          [Deprecated] Alias for --backend litellm --api-key KEY
-  --omniroute URL            [Deprecated] Alias for --backend omniroute --url URL
-  --omniroute-model MODEL    [Deprecated] Alias for --backend omniroute --model MODEL
-  --omniroute-key KEY        [Deprecated] Alias for --backend omniroute --api-key KEY
-EOF
-  fi
-
-  cat <<EOF
-
-EXAMPLES:
-  yt-summary "https://www.youtube.com/watch?v=VIDEO_ID"
-  yt-summary -m llama3.2:3b --length short urls.txt
-  yt-summary --backend litellm --url http://localhost:4000 -m gpt-4o "https://youtube.com/watch?v=ID"
-  yt-summary --backend omniroute -m llama3 "https://youtube.com/watch?v=ID"
-  yt-summary --stats "https://www.youtube.com/playlist?list=PLAYLIST_ID"
+Run 'yt-summary --help' for the option list.
+Run 'yt-summary --help-all' for advanced options and every .env variable.
 EOF
 }
 
 parse_args() {
   if [[ $# -eq 0 ]]; then
-    usage
+    usage_error "no target specified" \
+      "expected a YouTube video URL, a playlist URL, or a file with URLs."
     exit 1
   fi
 
@@ -422,19 +351,23 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -m|--model|--host|--num-ctx|--url|--proxy|--api-key|--key|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|--litellm-proxy|--litellm-model|--litellm-key|--omniroute|--omniroute-model|--omniroute-key|-l|--language|--backend|--whisper-host|--whisper-model|--whisper-ssh-user|--whisper-ssh-auth|--whisper-ssh-key|--whisper-ssh-password|--whisper-transfer|--whisper-remote-dir|--whisper-shared-dir)
+        if [[ $# -lt 2 || -z "${2:-}" || "$2" == -* ]]; then
+          usage_error "option '$1' requires a value"
+          exit 1
+        fi
         args+=("$1" "$2")
         shift 2
         ;;
       --help-all)
-        SHOW_ALL_HELP=true
-        usage
+        usage all
         exit 0
         ;;
       --help|-h)
-        usage
+        usage help
         exit 0
         ;;
       -*)
+        # Flag options are collected here and validated in the second pass
         args+=("$1")
         shift
         ;;
@@ -446,12 +379,17 @@ parse_args() {
   done
 
   if [[ ${#positional[@]} -eq 0 ]]; then
-    log_error "No target URL specified"
-    usage
+    usage_error "no target specified" \
+      "expected a YouTube video URL, a playlist URL, or a file with URLs."
     exit 1
   fi
 
   TARGET="${positional[0]}"
+
+  local extra=("${positional[@]:1}")
+  if [[ ${#extra[@]} -gt 0 ]]; then
+    cli_warn "only one target is processed, ignoring: ${extra[*]}"
+  fi
 
   # Second pass: process options
   set -- "${args[@]}"
@@ -480,7 +418,7 @@ parse_args() {
           OMNIROUTE_API_KEY="$2"
           shift 2
           ;;
-      -h|--host)
+      --host)
           OLLAMA_HOST="$2"
           CLI_OPT_OLLAMA="true"
           shift 2
@@ -615,7 +553,8 @@ parse_args() {
                 LLM_BACKEND_FROM_CLI="true"
                 ;;
             *)
-                log_error "Invalid backend: $2 (must be: ollama, litellm, omniroute)"
+                usage_error "invalid value '$2' for '$1'" \
+                  "must be one of: ollama, litellm, omniroute"
                 exit 1
                 ;;
             esac
@@ -703,23 +642,18 @@ parse_args() {
             VERBOSE=true
             shift
             ;;
-        --help-all)
-            SHOW_ALL_HELP=true
-            usage
-            exit 0
-            ;;
-        --help|-h)
-            usage
-            exit 0
-            ;;
         -*)
-            log_error "Unknown option: $1"
-            usage
+            local suggestion
+            suggestion=$(suggest_option "$1")
+            if [[ -n "$suggestion" ]]; then
+                usage_error "unknown option '$1'" "did you mean '$suggestion'?"
+            else
+                usage_error "unknown option '$1'"
+            fi
             exit 1
             ;;
         *)
-            log_error "Unexpected argument: $1"
-            usage
+            usage_error "unexpected argument '$1'"
             exit 1
             ;;
     esac
@@ -1636,10 +1570,14 @@ cleanup_temp() {
     if [[ "$VERBOSE" == "true" ]] || [[ "$TRANSCRIPT_VERBOSE" == "true" ]]; then
       log_info "Cleaning up temporary files..."
     fi
-    rm -rf "$TMP_BASE"
     rm -rf "${TRANSCRIPT_TMP:-}"
     rm -rf "${METADATA_TMP:-}"
     rm -rf "${STATS_FILE:-}"
+    # Only remove TMP_BASE itself when the script created it; a TMP_BASE
+    # provided via .env/environment belongs to the user.
+    if [[ "$TMP_BASE_OWNED" == "true" ]]; then
+      rm -rf "$TMP_BASE"
+    fi
     if [[ "$VERBOSE" == "true" ]] || [[ "$TRANSCRIPT_VERBOSE" == "true" ]]; then
       log_info "Temporary files cleaned."
     fi

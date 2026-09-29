@@ -5,7 +5,11 @@
 ```bash
 ./yt-summary "https://youtube.com/watch?v=VIDEO_ID"
 ./yt-summary --help
+./yt-summary --help-all   # advanced/legacy options + every .env variable
 ```
+
+Invocation errors (no target, unknown option, option missing its value) print a
+short synopsis on stderr and exit 1 - not the full help.
 
 ## Key commands
 
@@ -24,7 +28,7 @@
 ## Architecture
 
 - **Entry point**: `./yt-summary` (1329 lines)
-- **Libraries**: `lib/ollama.sh`, `lib/cache.sh`, `lib/transcript.sh`, `lib/tts.sh`, `lib/omniroute.sh`, `lib/whisper.sh`
+- **Libraries**: `lib/ollama.sh`, `lib/cache.sh`, `lib/transcript.sh`, `lib/tts.sh`, `lib/omniroute.sh`, `lib/whisper.sh`, `lib/help.sh` (usage + `.env` reference)
 - **Pipeline**: fetch transcript → split into chunks → summarize each → merge → extract key points
 
 ## Dependencies
@@ -108,7 +112,8 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server |
 | `OLLAMA_MODEL` | `gemma2:2b` | Model name |
 | `OLLAMA_NUM_CTX` | `24000` | Ollama context window |
-| `LLM_BACKEND` | `ollama` | Backend: `ollama`, `litellm`, or `omniroute` |
+| `LLM_BACKEND` | `omniroute` | Backend: `ollama`, `litellm`, or `omniroute` |
+| `LLM_URL` / `LLM_MODEL` / `LLM_API_KEY` | *(empty)* | Unified overrides applied to the selected backend |
 | `CHUNK_WORDS` | `900` | Words per transcript chunk |
 | `AUTO_CHUNK` | `true` | Ask the LLM for the recommended chunk size before summarizing (`false` = always use `CHUNK_WORDS`; an explicit `--chunk-words` flag also disables it) |
 | `MAX_TOKENS` | `30000` | Max tokens per LLM response |
@@ -142,9 +147,10 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `TELEGRAM_BOT_TOKEN` | *(empty)* | Telegram bot token |
 | `TELEGRAM_CHAT_ID` | *(empty)* | Telegram chat ID |
 | `TELEGRAM_API_URL` | `https://api.telegram.org` | Telegram API base URL |
-| `SEND_TELEGRAM` | `false` | Send Telegram notifications |
+| `SEND_TELEGRAM` | `true` | Send Telegram notifications |
+| `MQTT_BROKER` / `MQTT_TOPIC` / `MQTT_USER` / `MQTT_PASSWORD` | *(empty)* | Publish session statistics as JSON (requires `mosquitto-clients`) |
 | `EMAIL_FROM` | *(empty)* | Sender email address |
-| `TMP_BASE` | `/temp/yt-summary` | Temp file base dir |
+| `TMP_BASE` | *fresh `mktemp -d` per run* | Temp file base dir; a configured dir is reused and not deleted on exit |
 | `EXTERNAL_TRACKING_FILE` | `/data/ltr/yt-dlp/files` | Video ID tracking file |
 | `MAX_PLAYLIST_VIDEO_AGE_DAYS` | `0` | Max video age for playlists (0 = no limit) |
 | `MAX_PLAYLIST_VIDEOS` | `0` | Max videos per playlist (0 = no limit) |
@@ -160,6 +166,8 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `WHISPER_TRANSFER` | `rsync` | Audio transfer: `rsync` \| `scp` \| `shared` |
 | `WHISPER_SHARED_DIR` | *(empty)* | Shared folder path (transfer=shared) |
 | `WHISPER_REMOTE_DIR` | `/tmp/yt-summary-whisper` | Remote work dir on the whisper host |
+| `WHISPER_BIN` | `whisper-ctranslate2` | whisper binary name/path (local mode) |
+| `PROMPT_SYSTEM_CHUNKSIZE` / `PROMPT_USER_CHUNKSIZE` | *(defaults)* | Chunk-size recommendation prompts |
 
 > [!WARNING]
 > Never add real API keys/tokens to committed files. Keep them in the
