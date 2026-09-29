@@ -11,86 +11,86 @@ LIB_DIR="${SCRIPT_DIR}/lib"
 # no command substitution, comments and blank lines ignored.
 # .env must contain plain KEY=VALUE lines; values may be quoted.
 load_env_file() {
-    local env_file="${1:-${SCRIPT_DIR}/.env}"
-    [[ -f "$env_file" ]] || return 0
+  local env_file="${1:-${SCRIPT_DIR}/.env}"
+  [[ -f "$env_file" ]] || return 0
 
-    # Warn if the env file is world/group readable — it may contain secrets.
-    if command -v stat >/dev/null 2>&1; then
-        local perms
-        perms=$(stat -c '%a' "$env_file" 2>/dev/null || echo "")
-        if [[ "$perms" == *[1-7][1-7][1-7] ]] && [[ "$perms" != "000" ]]; then
-            echo "WARNING: $env_file permissions are $perms; consider 'chmod 600 $env_file'" >&2
-        fi
+  # Warn if the env file is world/group readable — it may contain secrets.
+  if command -v stat >/dev/null 2>&1; then
+    local perms
+    perms=$(stat -c '%a' "$env_file" 2>/dev/null || echo "")
+    if [[ "$perms" == *[1-7][1-7][1-7] ]] && [[ "$perms" != "000" ]]; then
+      echo "WARNING: $env_file permissions are $perms; consider 'chmod 600 $env_file'" >&2
     fi
+  fi
 
-    local line key value
-    local pending_key="" pending_delim="" acc=""
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        # Inside a heredoc value: preserve lines literally until the delimiter.
-        if [[ -n "$pending_key" ]]; then
-            local trimmed="${line#"${line%%[![:space:]]*}"}"
-            trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
-            if [[ "$trimmed" == "$pending_delim" ]]; then
-                acc="${acc%$'\n'}"
-                if [[ "$pending_key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-                    export "$pending_key=$acc"
-                else
-                    echo "WARNING: skipping invalid key '$pending_key' in $env_file" >&2
-                fi
-                pending_key=""
-                pending_delim=""
-                acc=""
-            else
-                acc+="${line}"$'\n'
-            fi
-            continue
-        fi
-
-        line="${line%%#*}"                       # strip comments
-        line="${line#"${line%%[![:space:]]*}"}"  # trim leading whitespace
-        line="${line%"${line##*[![:space:]]}"}"  # trim trailing whitespace
-        [[ -z "$line" ]] && continue
-        key="${line%%=*}"
-        value="${line#*=}"
-        [[ "$key" == "$line" ]] && continue  # no '=' -> skip
-        key="${key#"${key%%[![:space:]]*}"}"  # trim leading whitespace
-        key="${key#export }"                   # allow 'export ' prefix
-        key="${key%"${key##*[![:space:]]}"}"   # trim trailing whitespace
-        [[ -z "$key" ]] && continue
-        # Heredoc multi-line value: KEY=<<'EOF'  or  KEY=<<EOF
-        if [[ "$value" == "<<'"*"'" ]]; then
-            pending_key="$key"
-            pending_delim="${value#<<\'}"
-            pending_delim="${pending_delim%\'}"
-            acc=""
-            if [[ -z "$pending_delim" ]]; then
-                echo "WARNING: missing heredoc delimiter for key '$key' in $env_file" >&2
-                pending_key=""
-            fi
-            continue
-        elif [[ "$value" == '<<'* ]]; then
-            pending_key="$key"
-            pending_delim="${value#<<}"
-            acc=""
-            if [[ -z "$pending_delim" ]]; then
-                echo "WARNING: missing heredoc delimiter for key '$key' in $env_file" >&2
-                pending_key=""
-            fi
-            continue
-        fi
-        # strip surrounding quotes from value
-        if [[ "$value" == \"*\" ]]; then
-            value="${value#\"}"; value="${value%\"}"
-        elif [[ "$value" == \'*\' ]]; then
-            value="${value#\'}"; value="${value%\'}"
-        fi
-        # only allow safe identifier keys
-        if [[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-            export "$key=$value"
+  local line key value
+  local pending_key="" pending_delim="" acc=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Inside a heredoc value: preserve lines literally until the delimiter.
+    if [[ -n "$pending_key" ]]; then
+      local trimmed="${line#"${line%%[![:space:]]*}"}"
+      trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+      if [[ "$trimmed" == "$pending_delim" ]]; then
+        acc="${acc%$'\n'}"
+        if [[ "$pending_key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+          export "$pending_key=$acc"
         else
-            echo "WARNING: skipping invalid key '$key' in $env_file" >&2
+          echo "WARNING: skipping invalid key '$pending_key' in $env_file" >&2
         fi
-    done < "$env_file"
+        pending_key=""
+        pending_delim=""
+        acc=""
+      else
+        acc+="${line}"$'\n'
+      fi
+        continue
+      fi
+
+      line="${line%%#*}"                       # strip comments
+      line="${line#"${line%%[![:space:]]*}"}"  # trim leading whitespace
+      line="${line%"${line##*[![:space:]]}"}"  # trim trailing whitespace
+      [[ -z "$line" ]] && continue
+      key="${line%%=*}"
+      value="${line#*=}"
+      [[ "$key" == "$line" ]] && continue  # no '=' -> skip
+      key="${key#"${key%%[![:space:]]*}"}"  # trim leading whitespace
+      key="${key#export }"                   # allow 'export ' prefix
+      key="${key%"${key##*[![:space:]]}"}"   # trim trailing whitespace
+      [[ -z "$key" ]] && continue
+      # Heredoc multi-line value: KEY=<<'EOF'  or  KEY=<<EOF
+      if [[ "$value" == "<<'"*"'" ]]; then
+        pending_key="$key"
+        pending_delim="${value#<<\'}"
+        pending_delim="${pending_delim%\'}"
+        acc=""
+      if [[ -z "$pending_delim" ]]; then
+        echo "WARNING: missing heredoc delimiter for key '$key' in $env_file" >&2
+        pending_key=""
+      fi
+      continue
+    elif [[ "$value" == '<<'* ]]; then
+      pending_key="$key"
+      pending_delim="${value#<<}"
+      acc=""
+      if [[ -z "$pending_delim" ]]; then
+        echo "WARNING: missing heredoc delimiter for key '$key' in $env_file" >&2
+        pending_key=""
+      fi
+      continue
+    fi
+    # strip surrounding quotes from value
+    if [[ "$value" == \"*\" ]]; then
+      value="${value#\"}"; value="${value%\"}"
+    elif [[ "$value" == \'*\' ]]; then
+      value="${value#\'}"; value="${value%\'}"
+    fi
+    # only allow safe identifier keys
+    if [[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+      export "$key=$value"
+    else
+      echo "WARNING: skipping invalid key '$key' in $env_file" >&2
+    fi
+  done < "$env_file"
 }
 
 load_env_file
@@ -181,7 +181,7 @@ PROMPT_EOCS
 # sed builds the escaped form so injected transcript/summary text stays literal
 # (handles '&', backslashes, newlines, and embedded quotes safely).
 escape_repl() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/&/\\&/g'
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/&/\\&/g'
 }
 
 : "${OLLAMA_HOST:=http://localhost:11434}"
@@ -230,6 +230,8 @@ fi
 : "${WHISPER_MODEL:=medium}"         # whisper model (tiny/base/small/medium/large-v3)
 : "${WHISPER_BIN:=whisper-ctranslate2}"  # Binary name or path (local mode)
 : "${TTS_ENGINE:=piper}"              # TTS engine: piper or edge-tts
+: "${PIPER_BIN:=piper}"                # piper binary name or path
+: "${EDGE_TTS_BIN:=edge-tts}"          # edge-tts binary name or path
 : "${TELEGRAM_BOT_TOKEN:=}"
 : "${TELEGRAM_CHAT_ID:=}"
 : "${TELEGRAM_API_URL:=https://api.telegram.org}"
@@ -245,14 +247,20 @@ AUDIO_OUTPUT=""
 : "${AUDIO_FORMAT:=mp3}"
 : "${AUDIO_VOICE:=}"
 : "${VOICES_DIR:=}"
-: "${DEFAULT_VOICE_PIPER_EN:=en_GB-alan-medium}"
-: "${DEFAULT_VOICE_PIPER_RO:=ro_RO-mihai-medium}"
+: "${DEFAULT_VOICE_PIPER_EN:=en_US-ryan-high}"
+: "${DEFAULT_VOICE_PIPER_RO:=ro_RO-sanda-high}"
 : "${DEFAULT_VOICE_TTS_EN:=en-US-EmmaMultilingualNeural}"
 : "${DEFAULT_VOICE_TTS_RO:=ro-RO-AlinaNeural}"
 : "${EXTERNAL_TRACKING_FILE:=}"
 
-TMP_BASE=$(mktemp -d -p /temp/ yt-summary-XXXX)
-CACHE_DIR=${TMP_BASE}/yt-summary-cache
+TMP_BASE_OWNED=false
+if [[ -n "${TMP_BASE:-}" ]]; then
+  mkdir -p "$TMP_BASE"
+else
+  TMP_BASE=$(mktemp -d -p /temp/ yt-summary-XXXX)
+  TMP_BASE_OWNED=true
+fi
+: "${CACHE_DIR:=/tmp/yt-summary-cache}"
 trap cleanup_temp EXIT
 
 FORCE=false
@@ -268,729 +276,647 @@ EMAIL_TO=""
 : "${EMAIL_FROM:=}"
 TESTING_MODE=false
 IGNORE_PROCESSED=false
-SHOW_ALL_HELP=false
 
 # Track which backend-specific CLI options were explicitly passed
 CLI_OPT_OLLAMA=""
 CLI_OPT_LITELLM=""
 CLI_OPT_OMNIROUTE=""
 
+# Help/usage output (synopsis, options, advanced, .env reference)
+source "${LIB_DIR}/help.sh"
+
 log_debug() {
-    if [[ "$VERBOSE" == "true" ]]; then
-        echo "[DEBUG] $*" | systemd-cat -p 4 -t yt-summary
-    fi
+  if [[ "$VERBOSE" == "true" ]]; then
+    echo "[DEBUG] $*" | systemd-cat -p 4 -t yt-summary
+  fi
 }
 
 log_info() {
-    if [[ "$VERBOSE" == "true" ]]; then
-        echo "[INFO] $*" | systemd-cat -p 4 -t yt-summary
-    fi
+  if [[ "$VERBOSE" == "true" ]]; then
+    echo "[INFO] $*" | systemd-cat -p 4 -t yt-summary
+  fi
 }
 
 log_warn() {
-    echo "[WARN] $*" | systemd-cat -p 4 -t yt-summary
+  echo "[WARN] $*" | systemd-cat -p 4 -t yt-summary
 }
 
 log_error() {
-    echo "[ERROR] $*" | systemd-cat -p 4 -t yt-summary
+  echo "[ERROR] $*" | systemd-cat -p 4 -t yt-summary
 }
 
-usage() {
-    cat <<EOF
-yt-summary - YouTube video summarizer using Ollama/LiteLLM/Omniroute
+# Help output (synopsis / options / advanced / .env reference) lives in
+# lib/help.sh; see usage() there.
 
-USAGE:
-    yt-summary [options] <target>
-    yt-summary --help
-    yt-summary --help-all
+# Command-line diagnostics go to stderr so they stay visible in the terminal,
+# unlike log_*() which writes to the systemd journal.
+cli_error() {
+  printf 'yt-summary: error: %s\n' "$*" >&2
+}
 
-CONFIGURATION:
-    A .env file in the script directory (gitignored) sets all defaults.
-    See .env.example for available options (LLM_BACKEND, CHUNK_WORDS,
-    MAX_TOKENS, SUMMARY_LENGTH, TARGET_LANGUAGE, TTS_ENGINE, etc.).
-    Precedence: CLI flags > environment variables > .env > hard defaults.
+cli_warn() {
+  printf 'yt-summary: warning: %s\n' "$*" >&2
+}
 
-TARGET:
-    YouTube video URL, playlist URL, or text file containing URLs (one per line)
+# Bad invocation: report the problem, then the synopsis (not the full help,
+# which would bury the error) plus a pointer to --help.
+usage_error() {
+  cli_error "$1"
+  shift
+  while [[ $# -gt 0 ]]; do
+    printf 'yt-summary: %s\n' "$*" >&2
+    shift
+  done
+  usage short >&2
+  cat >&2 <<'EOF'
 
-BACKEND & MODEL OPTIONS:
-    --backend BACKEND          LLM backend: ollama, litellm, omniroute (default: ${LLM_BACKEND})
-    -m, --model MODEL          Model name (default: ${OLLAMA_MODEL})
-    --url, --proxy URL         Backend server/proxy URL (default: ${OLLAMA_HOST})
-    --api-key, --key KEY       API key for LiteLLM or Omniroute
-    -h, --host HOST            Ollama server URL alias (default: ${OLLAMA_HOST})
-    --num-ctx NUM              Context window size for Ollama (default: ${OLLAMA_NUM_CTX})
-
-CONTENT & OUTPUT OPTIONS:
-    --length LENGTH            Summary length: short, medium, long (default: ${SUMMARY_LENGTH})
-    -l, --language LANG        Target language (ISO 639 code, default: ${TARGET_LANGUAGE})
-    --summary-only             Only generate summary section
-    --key-points-only          Only generate key points section
-    --print-only               Print output to console only
-    --save-only                Save output to file only
-    -s, --stats                Show session statistics at the end
-    --include-stats            Include per-video statistics in output document
-    -e, --email EMAIL          Send output to email address
-    --from EMAIL               Sender email address (default: same as --email)
-    --telegram                 Send per-video statistics as a Telegram message
-
-AUDIO (TTS) OPTIONS:
-    --audio                    Generate audio from summary
-    --audio-output FILE        Output audio file path
-    --audio-format FORMAT      Audio format: m4a or mp3 (default: ${AUDIO_FORMAT})
-    --voice VOICE              Explicit voice name (overrides language selection)
-    --tts-engine ENGINE        TTS engine: piper or edge-tts (default: ${TTS_ENGINE})
-
-TRANSCRIPTION FALLBACK (WHISPER) OPTIONS:
-    All options below configure the whisper-ctranslate2 fallback, used when no
-    subtitles are available: the audio track is transcribed (locally or via SSH).
-    --no-whisper               Disable the whisper transcription fallback
-    --whisper-host HOST        whisper host: localhost or remote IP/hostname (default: ${WHISPER_HOST})
-    --whisper-model MODEL      whisper model: tiny/base/small/medium/large-v3 (default: ${WHISPER_MODEL})
-    --whisper-ssh-user USER    SSH username on the remote whisper host
-    --whisper-ssh-auth AUTH    SSH auth mode: config | key | password (default: ${WHISPER_SSH_AUTH})
-    --whisper-ssh-key KEY      SSH private key path when auth=key (default: ${WHISPER_SSH_KEY})
-    --whisper-ssh-password PASSWORD
-                               SSH password when auth=password (requires sshpass)
-    --whisper-transfer MODE    Audio transfer: rsync | scp | shared (default: ${WHISPER_TRANSFER})
-    --whisper-remote-dir DIR   Remote work dir on whisper host (default: ${WHISPER_REMOTE_DIR})
-    --whisper-shared-dir DIR   Shared folder path when transfer=shared
-
-PLAYLIST OPTIONS:
-    --max-playlist-videos N    Maximum number of videos to process from playlists (0 = no limit)
-    --max-playlist-video-age-days D
-                               Maximum age of videos to process from playlists in days (0 = no limit)
-
-SYSTEM & CACHE OPTIONS:
-    -f, --force                Force regeneration even if cached
-    --no-auto-chunk            Disable the LLM chunk-size recommendation (use CHUNK_WORDS)
-    --cleanup                  Delete temporary files after processing
-    -v, --verbose              Enable verbose/debug output
-    --help                     Show this help summary
-    --help-all                 Show all available options (including legacy/advanced)
-EOF
-
-    if [[ "${SHOW_ALL_HELP:-false}" == "true" ]]; then
-        cat <<EOF
-
-ADVANCED & LEGACY OPTIONS:
-    --think                    Enable Ollama think mode
-    --chunk-words WORDS        Target words per chunk (default: ${CHUNK_WORDS}; disables auto chunk size)
-    --auto-chunk / AUTO_CHUNK  Ask the LLM for recommended chunk size before summarizing (default: ${AUTO_CHUNK})
-    --max-tokens TOKENS        Max tokens per response (default: ${MAX_TOKENS})
-    --temperature TEMP         Temperature for LLM (default: ${TEMPERATURE})
-    --max-retries RETRIES      Max retries per LLM call (default: ${MAX_RETRIES})
-    --testing                  Testing mode: generate output without caching or stats
-    --ignore-processed        Skip videos that have already been processed
-    --transcript-verbose       Show transcript fetching details
-    --litellm-proxy URL        [Deprecated] Alias for --backend litellm --url URL
-    --litellm-model MODEL      [Deprecated] Alias for --backend litellm --model MODEL
-    --litellm-key KEY          [Deprecated] Alias for --backend litellm --api-key KEY
-    --omniroute URL            [Deprecated] Alias for --backend omniroute --url URL
-    --omniroute-model MODEL    [Deprecated] Alias for --backend omniroute --model MODEL
-    --omniroute-key KEY        [Deprecated] Alias for --backend omniroute --api-key KEY
-EOF
-    fi
-
-    cat <<EOF
-
-EXAMPLES:
-    yt-summary "https://www.youtube.com/watch?v=VIDEO_ID"
-    yt-summary -m llama3.2:3b --length short urls.txt
-    yt-summary --backend litellm --url http://localhost:4000 -m gpt-4o "https://youtube.com/watch?v=ID"
-    yt-summary --backend omniroute -m llama3 "https://youtube.com/watch?v=ID"
-    yt-summary --stats "https://www.youtube.com/playlist?list=PLAYLIST_ID"
+Run 'yt-summary --help' for the option list.
+Run 'yt-summary --help-all' for advanced options and every .env variable.
 EOF
 }
 
 parse_args() {
-    if [[ $# -eq 0 ]]; then
-        usage
-        exit 1
-    fi
+  if [[ $# -eq 0 ]]; then
+    usage_error "no target specified" \
+      "expected a YouTube video URL, a playlist URL, or a file with URLs."
+    exit 1
+  fi
 
-    # First pass: find the target (first non-option argument)
-    TARGET=""
-    local args=()
-    local positional=()
+  # First pass: find the target (first non-option argument)
+  TARGET=""
+  local args=()
+  local positional=()
 
-    # Collect arguments, separate options from positional
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -m|--model|--host|--num-ctx|--url|--proxy|--api-key|--key|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|--litellm-proxy|--litellm-model|--litellm-key|--omniroute|--omniroute-model|--omniroute-key|-l|--language|--backend|--whisper-host|--whisper-model|--whisper-ssh-user|--whisper-ssh-auth|--whisper-ssh-key|--whisper-ssh-password|--whisper-transfer|--whisper-remote-dir|--whisper-shared-dir)
-                args+=("$1" "$2")
-                shift 2
-                ;;
-            --help-all)
-                SHOW_ALL_HELP=true
-                usage
-                exit 0
-                ;;
-            --help|-h)
-                usage
-                exit 0
-                ;;
-            -*)
-                args+=("$1")
-                shift
+  # Collect arguments, separate options from positional
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -m|--model|--host|--num-ctx|--url|--proxy|--api-key|--key|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|--litellm-proxy|--litellm-model|--litellm-key|--omniroute|--omniroute-model|--omniroute-key|-l|--language|--backend|--whisper-host|--whisper-model|--whisper-ssh-user|--whisper-ssh-auth|--whisper-ssh-key|--whisper-ssh-password|--whisper-transfer|--whisper-remote-dir|--whisper-shared-dir)
+        if [[ $# -lt 2 || -z "${2:-}" || "$2" == -* ]]; then
+          usage_error "option '$1' requires a value"
+          exit 1
+        fi
+        args+=("$1" "$2")
+        shift 2
+        ;;
+      --help-all)
+        usage all
+        exit 0
+        ;;
+      --help|-h)
+        usage help
+        exit 0
+        ;;
+      -*)
+        # Flag options are collected here and validated in the second pass
+        args+=("$1")
+        shift
+        ;;
+      *)
+        positional+=("$1")
+        shift
+        ;;
+      esac
+  done
+
+  if [[ ${#positional[@]} -eq 0 ]]; then
+    usage_error "no target specified" \
+      "expected a YouTube video URL, a playlist URL, or a file with URLs."
+    exit 1
+  fi
+
+  TARGET="${positional[0]}"
+
+  local extra=("${positional[@]:1}")
+  if [[ ${#extra[@]} -gt 0 ]]; then
+    cli_warn "only one target is processed, ignoring: ${extra[*]}"
+  fi
+
+  # Second pass: process options
+  set -- "${args[@]}"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -m|--model)
+          LLM_MODEL="$2"
+          OLLAMA_MODEL="$2"
+          LITELLM_MODEL="$2"
+          OMNIROUTE_MODEL="$2"
+          CLI_OPT_OLLAMA="true"
+          shift 2
+          ;;
+      --url|--proxy)
+          LLM_URL="$2"
+          OLLAMA_HOST="$2"
+          LITELLM_PROXY_URL="$2"
+          OMNIROUTE_URL="$2"
+          CLI_OPT_OLLAMA="true"
+          shift 2
+          ;;
+      --api-key|--key)
+          LLM_API_KEY="$2"
+          LITELLM_API_KEY="$2"
+          OMNIROUTE_API_KEY="$2"
+          shift 2
+          ;;
+      --host)
+          OLLAMA_HOST="$2"
+          CLI_OPT_OLLAMA="true"
+          shift 2
+          ;;
+      --num-ctx)
+          OLLAMA_NUM_CTX="${2:-24000}"
+          CLI_OPT_OLLAMA="true"
+          shift 2
+          ;;
+      --chunk-words)
+          CHUNK_WORDS="${2:-900}"
+          AUTO_CHUNK=false          # An explicit CLI chunk size overrides the auto recommendation
+          shift 2
+          ;;
+      --max-tokens)
+          MAX_TOKENS="${2:-30000}"
+          shift 2
+          ;;
+      --temperature)
+          TEMPERATURE="${2:-0.1}"
+          shift 2
+          ;;
+      --max-retries)
+          MAX_RETRIES="${2:-5}"
+          shift 2
+          ;;
+      -l|--language)
+          TARGET_LANGUAGE="$2"
+          LANG_EXPLICIT=true
+          shift 2
+          ;;
+      --length)
+          SUMMARY_LENGTH="$2"
+          shift 2
+          ;;
+      --think)
+          THINK=true
+          shift
+          ;;
+      -f|--force)
+          FORCE=true
+          shift
+          ;;
+      --summary-only)
+          INCLUDE_SUMMARY=true
+          INCLUDE_KEY_POINTS=false
+          shift
+          ;;
+      --key-points-only)
+          INCLUDE_SUMMARY=false
+          INCLUDE_KEY_POINTS=true
+          shift
+          ;;
+      --print-only)
+          PRINT_OUTPUT=true
+          SAVE_OUTPUT=false
+          shift
+          ;;
+      --save-only)
+          PRINT_OUTPUT=false
+          SAVE_OUTPUT=true
+          shift
+          ;;
+      -s|--stats)
+          SHOW_STATS=true
+          shift
+          ;;
+      --include-stats)
+          SHOW_STATS_IN_OUTPUT=true
+          shift
+          ;;
+      -e|--email)
+          EMAIL_TO="$2"
+          shift 2
+          ;;
+      --from)
+          EMAIL_FROM="${2:-}"
+          shift 2
+          ;;
+      --telegram)
+          SEND_TELEGRAM=true
+          shift
+          ;;
+      --cleanup)
+          CLEANUP=true
+          shift
+          ;;
+      --transcript-verbose)
+          TRANSCRIPT_VERBOSE=true
+          shift
+          ;;
+      --audio)
+          GENERATE_AUDIO=true
+          shift
+          ;;
+      --audio-output)
+          AUDIO_OUTPUT="$2"
+          shift 2
+          ;;
+      --audio-format)
+          AUDIO_FORMAT="$2"
+          shift 2
+          ;;
+      --voice)
+          AUDIO_VOICE="$2"
+          shift 2
+          ;;
+      --tts-engine)
+          TTS_ENGINE="$2"
+          shift 2
+          ;;
+      --max-playlist-videos)
+          MAX_PLAYLIST_VIDEOS="$2"
+          shift 2
+          ;;
+      --max-playlist-video-age-days)
+          MAX_PLAYLIST_VIDEO_AGE_DAYS="$2"
+          shift 2
+          ;;
+      --testing)
+          TESTING_MODE=true
+          shift
+          ;;
+      --ignore-processed)
+          IGNORE_PROCESSED=true
+          shift
+          ;;
+      --backend)
+          case "$2" in
+            ollama|litellm|omniroute)
+                LLM_BACKEND="$2"
+                LLM_BACKEND_FROM_CLI="true"
                 ;;
             *)
-                positional+=("$1")
-                shift
-                ;;
-        esac
-    done
-
-    if [[ ${#positional[@]} -eq 0 ]]; then
-        log_error "No target URL specified"
-        usage
-        exit 1
-    fi
-
-    TARGET="${positional[0]}"
-
-    # Second pass: process options
-    set -- "${args[@]}"
-
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -m|--model)
-                LLM_MODEL="$2"
-                OLLAMA_MODEL="$2"
-                LITELLM_MODEL="$2"
-                OMNIROUTE_MODEL="$2"
-                CLI_OPT_OLLAMA="true"
-                shift 2
-                ;;
-            --url|--proxy)
-                LLM_URL="$2"
-                OLLAMA_HOST="$2"
-                LITELLM_PROXY_URL="$2"
-                OMNIROUTE_URL="$2"
-                CLI_OPT_OLLAMA="true"
-                shift 2
-                ;;
-            --api-key|--key)
-                LLM_API_KEY="$2"
-                LITELLM_API_KEY="$2"
-                OMNIROUTE_API_KEY="$2"
-                shift 2
-                ;;
-            -h|--host)
-                OLLAMA_HOST="$2"
-                CLI_OPT_OLLAMA="true"
-                shift 2
-                ;;
-            --num-ctx)
-                OLLAMA_NUM_CTX="${2:-24000}"
-                CLI_OPT_OLLAMA="true"
-                shift 2
-                ;;
-            --chunk-words)
-                CHUNK_WORDS="${2:-900}"
-                # An explicit CLI chunk size overrides the auto recommendation
-                AUTO_CHUNK=false
-                shift 2
-                ;;
-            --max-tokens)
-                MAX_TOKENS="${2:-30000}"
-                shift 2
-                ;;
-            --temperature)
-                TEMPERATURE="${2:-0.1}"
-                shift 2
-                ;;
-            --max-retries)
-                MAX_RETRIES="${2:-5}"
-                shift 2
-                ;;
-            -l|--language)
-                TARGET_LANGUAGE="$2"
-                LANG_EXPLICIT=true
-                shift 2
-                ;;
-            --length)
-                SUMMARY_LENGTH="$2"
-                shift 2
-                ;;
-            --think)
-                THINK=true
-                shift
-                ;;
-            -f|--force)
-                FORCE=true
-                shift
-                ;;
-            --summary-only)
-                INCLUDE_SUMMARY=true
-                INCLUDE_KEY_POINTS=false
-                shift
-                ;;
-            --key-points-only)
-                INCLUDE_SUMMARY=false
-                INCLUDE_KEY_POINTS=true
-                shift
-                ;;
-            --print-only)
-                PRINT_OUTPUT=true
-                SAVE_OUTPUT=false
-                shift
-                ;;
-            --save-only)
-                PRINT_OUTPUT=false
-                SAVE_OUTPUT=true
-                shift
-                ;;
-            -s|--stats)
-                SHOW_STATS=true
-                shift
-                ;;
-            --include-stats)
-                SHOW_STATS_IN_OUTPUT=true
-                shift
-                ;;
-            -e|--email)
-                EMAIL_TO="$2"
-                shift 2
-                ;;
-            --from)
-                EMAIL_FROM="${2:-}"
-                shift 2
-                ;;
-            --telegram)
-                SEND_TELEGRAM=true
-                shift
-                ;;
-            --cleanup)
-                CLEANUP=true
-                shift
-                ;;
-            --transcript-verbose)
-                TRANSCRIPT_VERBOSE=true
-                shift
-                ;;
-            --audio)
-                GENERATE_AUDIO=true
-                shift
-                ;;
-            --audio-output)
-                AUDIO_OUTPUT="$2"
-                shift 2
-                ;;
-            --audio-format)
-                AUDIO_FORMAT="$2"
-                shift 2
-                ;;
-            --voice)
-                AUDIO_VOICE="$2"
-                shift 2
-                ;;
-            --tts-engine)
-                TTS_ENGINE="$2"
-                shift 2
-                ;;
-            --max-playlist-videos)
-                MAX_PLAYLIST_VIDEOS="$2"
-                shift 2
-                ;;
-            --max-playlist-video-age-days)
-                MAX_PLAYLIST_VIDEO_AGE_DAYS="$2"
-                shift 2
-                ;;
-            --testing)
-                TESTING_MODE=true
-                shift
-                ;;
-            --ignore-processed)
-                IGNORE_PROCESSED=true
-                shift
-                ;;
-            --backend)
-                case "$2" in
-                    ollama|litellm|omniroute)
-                        LLM_BACKEND="$2"
-                        LLM_BACKEND_FROM_CLI="true"
-                        ;;
-                    *)
-                        log_error "Invalid backend: $2 (must be: ollama, litellm, omniroute)"
-                        exit 1
-                        ;;
-                esac
-                shift 2
-                ;;
-            --litellm-proxy)
-                USE_LITELLM=true
-                LLM_BACKEND="litellm"
-                LITELLM_PROXY_URL="$2"
-                CLI_OPT_LITELLM="true"
-                shift 2
-                ;;
-            --litellm-model)
-                LITELLM_MODEL="$2"
-                CLI_OPT_LITELLM="true"
-                shift 2
-                ;;
-            --litellm-key)
-                LITELLM_API_KEY="$2"
-                CLI_OPT_LITELLM="true"
-                shift 2
-                ;;
-            --omniroute)
-                USE_OMNIROUTE=true
-                LLM_BACKEND="omniroute"
-                OMNIROUTE_URL="$2"
-                CLI_OPT_OMNIROUTE="true"
-                shift 2
-                ;;
-            --omniroute-model)
-                OMNIROUTE_MODEL="$2"
-                CLI_OPT_OMNIROUTE="true"
-                shift 2
-                ;;
-            --omniroute-key)
-                OMNIROUTE_API_KEY="$2"
-                CLI_OPT_OMNIROUTE="true"
-                shift 2
-                ;;
-            --whisper-host)
-                WHISPER_HOST="$2"
-                shift 2
-                ;;
-            --whisper-model)
-                WHISPER_MODEL="$2"
-                shift 2
-                ;;
-            --whisper-ssh-user)
-                WHISPER_SSH_USER="$2"
-                shift 2
-                ;;
-            --whisper-ssh-auth)
-                WHISPER_SSH_AUTH="$2"
-                shift 2
-                ;;
-            --whisper-ssh-key)
-                WHISPER_SSH_KEY="$2"
-                shift 2
-                ;;
-            --whisper-ssh-password)
-                WHISPER_SSH_PASSWORD="$2"
-                shift 2
-                ;;
-            --whisper-transfer)
-                WHISPER_TRANSFER="$2"
-                shift 2
-                ;;
-            --whisper-remote-dir)
-                WHISPER_REMOTE_DIR="$2"
-                shift 2
-                ;;
-            --whisper-shared-dir)
-                WHISPER_SHARED_DIR="$2"
-                shift 2
-                ;;
-            --no-whisper)
-                WHISPER_ENABLED=false
-                shift
-                ;;
-            --no-auto-chunk)
-                AUTO_CHUNK=false
-                shift
-                ;;
-            -v|--verbose)
-                VERBOSE=true
-                shift
-                ;;
-            --help-all)
-                SHOW_ALL_HELP=true
-                usage
-                exit 0
-                ;;
-            --help|-h)
-                usage
-                exit 0
-                ;;
-            -*)
-                log_error "Unknown option: $1"
-                usage
+                usage_error "invalid value '$2' for '$1'" \
+                  "must be one of: ollama, litellm, omniroute"
                 exit 1
                 ;;
-            *)
-                log_error "Unexpected argument: $1"
-                usage
-                exit 1
-                ;;
-        esac
-    done
+            esac
+            shift 2
+            ;;
+        --litellm-proxy)
+            USE_LITELLM=true
+            LLM_BACKEND="litellm"
+            LITELLM_PROXY_URL="$2"
+            CLI_OPT_LITELLM="true"
+            shift 2
+            ;;
+        --litellm-model)
+            LITELLM_MODEL="$2"
+            CLI_OPT_LITELLM="true"
+            shift 2
+            ;;
+        --litellm-key)
+            LITELLM_API_KEY="$2"
+            CLI_OPT_LITELLM="true"
+            shift 2
+            ;;
+        --omniroute)
+            USE_OMNIROUTE=true
+            LLM_BACKEND="omniroute"
+            OMNIROUTE_URL="$2"
+            CLI_OPT_OMNIROUTE="true"
+            shift 2
+            ;;
+        --omniroute-model)
+            OMNIROUTE_MODEL="$2"
+            CLI_OPT_OMNIROUTE="true"
+            shift 2
+            ;;
+        --omniroute-key)
+            OMNIROUTE_API_KEY="$2"
+            CLI_OPT_OMNIROUTE="true"
+            shift 2
+            ;;
+        --whisper-host)
+            WHISPER_HOST="$2"
+            shift 2
+            ;;
+        --whisper-model)
+            WHISPER_MODEL="$2"
+            shift 2
+            ;;
+        --whisper-ssh-user)
+            WHISPER_SSH_USER="$2"
+            shift 2
+            ;;
+        --whisper-ssh-auth)
+            WHISPER_SSH_AUTH="$2"
+            shift 2
+            ;;
+        --whisper-ssh-key)
+            WHISPER_SSH_KEY="$2"
+            shift 2
+            ;;
+        --whisper-ssh-password)
+            WHISPER_SSH_PASSWORD="$2"
+            shift 2
+            ;;
+        --whisper-transfer)
+            WHISPER_TRANSFER="$2"
+            shift 2
+            ;;
+        --whisper-remote-dir)
+            WHISPER_REMOTE_DIR="$2"
+            shift 2
+            ;;
+        --whisper-shared-dir)
+            WHISPER_SHARED_DIR="$2"
+            shift 2
+            ;;
+        --no-whisper)
+            WHISPER_ENABLED=false
+            shift
+            ;;
+        --no-auto-chunk)
+            AUTO_CHUNK=false
+            shift
+            ;;
+        -v|--verbose)
+            VERBOSE=true
+            shift
+            ;;
+        -*)
+            local suggestion
+            suggestion=$(suggest_option "$1")
+            if [[ -n "$suggestion" ]]; then
+                usage_error "unknown option '$1'" "did you mean '$suggestion'?"
+            else
+                usage_error "unknown option '$1'"
+            fi
+            exit 1
+            ;;
+        *)
+            usage_error "unexpected argument '$1'"
+            exit 1
+            ;;
+    esac
+  done
 }
 
 get_length_profile() {
-    local length="$1"
-    
-    case "$length" in
-        short)
-            echo "Make this concise: keep only the most important facts and outcomes."
-            echo "1 3"
-            ;;
-        medium)
-            echo "Balance concision and coverage: include key details without being exhaustive."
-            echo "3 5"
-            ;;
-        long)
-            echo "Be detailed and thorough: preserve most concrete details from the chunk summaries."
-            echo "5 7"
-            ;;
-    esac
+  local length="$1"
+
+  case "$length" in
+    short)
+        echo "Make this concise: keep only the most important facts and outcomes."
+        echo "1 3"
+        ;;
+    medium)
+        echo "Balance concision and coverage: include key details without being exhaustive."
+        echo "3 5"
+        ;;
+    long)
+        echo "Be detailed and thorough: preserve most concrete details from the transcript or chunk summaries."
+        echo "5 7"
+        ;;
+  esac
 }
 
 # Produces the language instruction for a prompt. Subject is typically
 # "summary" or "key points". Unknown language codes produce no instruction.
 get_lang_instruction() {
-    local language="${1:-en}"
-    local subject="${2:-summary}"
-    local lang_instruction=""
-    case "$language" in
-        ro) lang_instruction="Write the ${subject} in Romanian." ;;
-        en) lang_instruction="Write the ${subject} in English." ;;
-        it) lang_instruction="Write the ${subject} in Italian." ;;
-        es) lang_instruction="Write the ${subject} in Spanish." ;;
-        fr) lang_instruction="Write the ${subject} in French." ;;
-        de) lang_instruction="Write the ${subject} in German." ;;
-        pt) lang_instruction="Write the ${subject} in Portuguese." ;;
-        ja) lang_instruction="Write the ${subject} in Japanese." ;;
-        ko) lang_instruction="Write the ${subject} in Korean." ;;
-        zh) lang_instruction="Write the ${subject} in Chinese." ;;
-        ru) lang_instruction="Write the ${subject} in Russian." ;;
-    esac
-    printf '%s' "$lang_instruction"
+  local language="${1:-en}"
+  local subject="${2:-summary}"
+  local lang_instruction=""
+  case "$language" in
+      ro) lang_instruction="Write the ${subject} in Romanian." ;;
+      en) lang_instruction="Write the ${subject} in English." ;;
+  esac
+  printf '%s' "$lang_instruction"
 }
 
 summarize_chunk() {
-    local chunk_text="$1"
-    local chunk_context="$2"
-    local language="${3:-en}"
+  local chunk_text="$1"
+  local chunk_context="$2"
+  local language="${3:-en}"
 
-    local lang_instruction
-    lang_instruction=$(get_lang_instruction "$language")
+  local lang_instruction
+  lang_instruction=$(get_lang_instruction "$language")
 
-    local system_prompt="${PROMPT_SYSTEM_CHUNK:-$PROMPT_SYSTEM_CHUNK_DEFAULT}"
+  local system_prompt="${PROMPT_SYSTEM_CHUNK:-$PROMPT_SYSTEM_CHUNK_DEFAULT}"
 
-    local user_prompt="${PROMPT_USER_CHUNK:-$PROMPT_USER_CHUNK_DEFAULT}"
-    user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
-    user_prompt="${user_prompt//\{\{CHUNK_TEXT\}\}/$(escape_repl "$chunk_text")}"
-    user_prompt="${user_prompt//\{\{CHUNK_CONTEXT\}\}/$(escape_repl "$chunk_context")}"
+  local user_prompt="${PROMPT_USER_CHUNK:-$PROMPT_USER_CHUNK_DEFAULT}"
+  user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
+  user_prompt="${user_prompt//\{\{CHUNK_TEXT\}\}/$(escape_repl "$chunk_text")}"
+  user_prompt="${user_prompt//\{\{CHUNK_CONTEXT\}\}/$(escape_repl "$chunk_context")}"
 
-    # Req 2.1: when the transcript is in a non-RO/EN language, the LLM
-    # translates it into English while summarizing.
-    if [[ -n "${TRANSLATE_FROM:-}" ]]; then
-        local translate_note
-        if [[ "$TRANSLATE_FROM" == "unspecified" ]] || [[ "$TRANSLATE_FROM" == "unknown" ]]; then
-            translate_note="Note: the transcript is not in English; translate it into English while summarizing."
-        else
-            translate_note="Note: the transcript is in ${TRANSLATE_FROM}; translate it into English while summarizing."
-        fi
-        user_prompt="${translate_note}
-
-${user_prompt}"
+  # Req 2.1: when the transcript is in a non-RO/EN language, the LLM
+  # translates it into English while summarizing.
+  if [[ -n "${TRANSLATE_FROM:-}" ]]; then
+    local translate_note
+    if [[ "$TRANSLATE_FROM" == "unspecified" ]] || [[ "$TRANSLATE_FROM" == "unknown" ]]; then
+      translate_note="Note: the transcript is not in English; translate it into English while summarizing."
+    else
+      translate_note="Note: the transcript is in ${TRANSLATE_FROM}; translate it into English while summarizing."
     fi
+    user_prompt="${translate_note} ${user_prompt}"
+  fi
 
-    local max_attempts=3
-    local attempt=0
-    local summary=""
-    local llm_response=""
-    # stderr goes to a file (never merged into the response): only the model's
-    # stdout may become the summary — 2>&1 would also capture debug traces or
-    # warnings and pollute the summarized content
-    local llm_err_file="${TMP_BASE}/llm_stderr.err"
-    
-    while [[ $attempt -lt $max_attempts ]]; do
-        log_debug "Summarizing chunk (attempt $((attempt + 1))/$max_attempts)"
-        
-        llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
-        local exit_code=$?
-        
-        if [[ $exit_code -eq 0 ]]; then
-            summary="$llm_response"
-            
-            log_debug "Chunk response: $(echo "$summary" | wc -w) words"
-            
-            local word_count
-            word_count=$(echo "$summary" | wc -w)
-            local chunk_word_count
-            chunk_word_count=$(echo "$chunk_text" | wc -w)
-            local min_words=$(( chunk_word_count / 30 + 8 ))
-            
-            if [[ $word_count -ge 8 ]]; then
-                echo "$summary"
-                return 0
-            fi
-            
-            log_warn "Chunk summary too short (${word_count} words, expected >= ${min_words}), retrying..."
-        else
-            log_warn "Chunk summarization failed: $(cat "$llm_err_file" 2>/dev/null || true)"
-        fi
-        
-        attempt=$((attempt + 1))
-    done
-    
-    # Return whatever we got, even if short, instead of erroring
-    if [[ -n "$summary" ]]; then
+  local max_attempts=3
+  local attempt=0
+  local summary=""
+  local llm_response=""
+  # stderr goes to a file (never merged into the response): only the model's
+  # stdout may become the summary — 2>&1 would also capture debug traces or
+  # warnings and pollute the summarized content
+  local llm_err_file="${TMP_BASE}/llm_stderr.err"
+
+  while [[ $attempt -lt $max_attempts ]]; do
+    log_debug "Summarizing chunk (attempt $((attempt + 1))/$max_attempts)"
+
+    llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
+    local exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
+      summary="$llm_response"
+
+      log_debug "Chunk response: $(echo "$summary" | wc -w) words"
+
+      local word_count
+      word_count=$(echo "$summary" | wc -w)
+      local chunk_word_count
+      chunk_word_count=$(echo "$chunk_text" | wc -w)
+      local min_words=$(( chunk_word_count / 30 + 8 ))
+
+      if [[ $word_count -ge 8 ]]; then
         echo "$summary"
         return 0
+      fi
+
+      log_warn "Chunk summary too short (${word_count} words, expected >= ${min_words}), retrying..."
+    else
+      log_warn "Chunk summarization failed: $(cat "$llm_err_file" 2>/dev/null || true)"
     fi
-    
-    log_error "Failed to summarize chunk after ${max_attempts} attempts"
-    return 1
+
+    attempt=$((attempt + 1))
+  done
+
+  # Return whatever we got, even if short, instead of erroring
+  if [[ -n "$summary" ]]; then
+    echo "$summary"
+    return 0
+  fi
+
+  log_error "Failed to summarize chunk after ${max_attempts} attempts"
+  return 1
 }
 
 aggregate_summary() {
-    local mapped_chunks_ref="$1"
-    local chunk_count="$2"
-    local length_guidance="$3"
-    local language="${4:-en}"
+  local mapped_chunks_ref="$1"
+  local chunk_count="$2"
+  local length_guidance="$3"
+  local language="${4:-en}"
 
-    local source_words=0
-    local formatted_chunks=""
+  local source_words=0
+  local formatted_chunks=""
 
-    local min_words_ratio
-    case "$SUMMARY_LENGTH" in
-        short) min_words_ratio=0.2 ;;
-        medium) min_words_ratio=0.4 ;;
-        long) min_words_ratio=0.6 ;;
-    esac
+  local min_words_ratio
+  case "$SUMMARY_LENGTH" in
+    short) min_words_ratio=0.2 ;;
+    medium) min_words_ratio=0.4 ;;
+    long) min_words_ratio=0.6 ;;
+  esac
 
-    while IFS= read -r line; do
-        source_words=$((source_words + $(echo "$line" | wc -w)))
-    done < "$mapped_chunks_ref"
+  while IFS= read -r line; do
+    source_words=$((source_words + $(echo "$line" | wc -w)))
+  done < "$mapped_chunks_ref"
 
-    local min_summary_words
-    if [[ $source_words -gt 100 ]]; then
-        min_summary_words=$(echo "$source_words * $min_words_ratio" | bc | cut -d. -f1)
-        [[ $min_summary_words -lt 20 ]] && min_summary_words=20
-    else
-        min_summary_words=20
-    fi
+  local min_summary_words
+  if [[ $source_words -gt 100 ]]; then
+    min_summary_words=$(echo "$source_words * $min_words_ratio" | bc | cut -d. -f1)
+    [[ $min_summary_words -lt 20 ]] && min_summary_words=20
+  else
+    min_summary_words=20
+  fi
 
-    local lang_instruction
-    lang_instruction=$(get_lang_instruction "$language")
+  local lang_instruction
+  lang_instruction=$(get_lang_instruction "$language")
 
-    local system_prompt="${PROMPT_SYSTEM_AGGREGATE:-$PROMPT_SYSTEM_AGGREGATE_DEFAULT}"
+  local system_prompt="${PROMPT_SYSTEM_AGGREGATE:-$PROMPT_SYSTEM_AGGREGATE_DEFAULT}"
 
-    local chunk_summaries
-    chunk_summaries=$(cat "$mapped_chunks_ref")
+  local chunk_summaries
+  chunk_summaries=$(cat "$mapped_chunks_ref")
 
-    local user_prompt="${PROMPT_USER_AGGREGATE:-$PROMPT_USER_AGGREGATE_DEFAULT}"
-    user_prompt="${user_prompt//\{\{MIN_SUMMARY_WORDS\}\}/$min_summary_words}"
-    user_prompt="${user_prompt//\{\{LENGTH_GUIDANCE\}\}/$(escape_repl "$length_guidance")}"
-    user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
-    user_prompt="${user_prompt//\{\{CHUNK_SUMMARIES\}\}/$(escape_repl "$chunk_summaries")}"
-    
-    local max_attempts=3
-    local attempt=0
-    local summary=""
-    local llm_response=""
-    # stderr to file — see summarize_chunk: never merge it into the summary
-    local llm_err_file="${TMP_BASE}/llm_stderr.err"
-    
-    while [[ $attempt -lt $max_attempts ]]; do
-        log_debug "Aggregating summary (attempt $((attempt + 1))/$max_attempts)"
-        
-        llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
-        local exit_code=$?
-        
-        if [[ $exit_code -eq 0 ]]; then
-            summary="$llm_response"
-            
-            local word_count
-            word_count=$(echo "$summary" | wc -w)
-            
-            if [[ $word_count -ge $min_summary_words ]]; then
-                echo "$summary"
-                return 0
-            fi
-            
-            log_warn "Aggregate summary too short (${word_count} words, expected >= ${min_summary_words}), retrying..."
-        else
-            log_warn "Aggregation failed: $(cat "$llm_err_file" 2>/dev/null || true)"
-        fi
-        
-        attempt=$((attempt + 1))
-    done
-    
-    # Return whatever we got, even if short
-    if [[ -n "$summary" ]]; then
+  local user_prompt="${PROMPT_USER_AGGREGATE:-$PROMPT_USER_AGGREGATE_DEFAULT}"
+  user_prompt="${user_prompt//\{\{MIN_SUMMARY_WORDS\}\}/$min_summary_words}"
+  user_prompt="${user_prompt//\{\{LENGTH_GUIDANCE\}\}/$(escape_repl "$length_guidance")}"
+  user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
+  user_prompt="${user_prompt//\{\{CHUNK_SUMMARIES\}\}/$(escape_repl "$chunk_summaries")}"
+
+  local max_attempts=3
+  local attempt=0
+  local summary=""
+  local llm_response=""
+  # stderr to file — see summarize_chunk: never merge it into the summary
+  local llm_err_file="${TMP_BASE}/llm_stderr.err"
+
+  while [[ $attempt -lt $max_attempts ]]; do
+    log_debug "Aggregating summary (attempt $((attempt + 1))/$max_attempts)"
+
+    llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
+    local exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
+      summary="$llm_response"
+
+      local word_count
+      word_count=$(echo "$summary" | wc -w)
+
+      if [[ $word_count -ge $min_summary_words ]]; then
         echo "$summary"
         return 0
+      fi
+
+      log_warn "Aggregate summary too short (${word_count} words, expected >= ${min_summary_words}), retrying..."
+    else
+      log_warn "Aggregation failed: $(cat "$llm_err_file" 2>/dev/null || true)"
     fi
-    
-    log_error "Failed to aggregate summary after ${max_attempts} attempts"
-    return 1
+
+    attempt=$((attempt + 1))
+  done
+
+  # Return whatever we got, even if short
+  if [[ -n "$summary" ]]; then
+    echo "$summary"
+    return 0
+  fi
+
+  log_error "Failed to aggregate summary after ${max_attempts} attempts"
+  return 1
 }
 
 generate_key_points() {
-    local mapped_chunks_ref="$1"
-    local final_summary="$2"
-    local language="${3:-en}"
+  local mapped_chunks_ref="$1"
+  local final_summary="$2"
+  local language="${3:-en}"
 
-    local bullet_ranges
-    bullet_ranges=$(get_length_profile "$SUMMARY_LENGTH")
-    read -r min_bullets max_bullets <<< "$(echo "$bullet_ranges" | tail -1)"
+  local bullet_ranges
+  bullet_ranges=$(get_length_profile "$SUMMARY_LENGTH")
+  read -r min_bullets max_bullets <<< "$(echo "$bullet_ranges" | tail -1)"
 
-    local lang_instruction
-    lang_instruction=$(get_lang_instruction "$language" "key points")
+  local lang_instruction
+  lang_instruction=$(get_lang_instruction "$language" "key points")
 
-    local system_prompt="${PROMPT_SYSTEM_KEYPOINTS:-$PROMPT_SYSTEM_KEYPOINTS_DEFAULT}"
+  local system_prompt="${PROMPT_SYSTEM_KEYPOINTS:-$PROMPT_SYSTEM_KEYPOINTS_DEFAULT}"
 
-    local chunk_summaries
-    chunk_summaries=$(cat "$mapped_chunks_ref")
+  local chunk_summaries
+  chunk_summaries=$(cat "$mapped_chunks_ref")
 
-    local user_prompt="${PROMPT_USER_KEYPOINTS:-$PROMPT_USER_KEYPOINTS_DEFAULT}"
-    user_prompt="${user_prompt//\{\{MIN_BULLETS\}\}/$min_bullets}"
-    user_prompt="${user_prompt//\{\{MAX_BULLETS\}\}/$max_bullets}"
-    user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
-    user_prompt="${user_prompt//\{\{FINAL_SUMMARY\}\}/$(escape_repl "$final_summary")}"
-    user_prompt="${user_prompt//\{\{CHUNK_SUMMARIES\}\}/$(escape_repl "$chunk_summaries")}"
-    
-    local max_attempts=3
-    local attempt=0
-    local key_points=""
-    local llm_response=""
-    # stderr to file — see summarize_chunk: never merge it into the key points
-    local llm_err_file="${TMP_BASE}/llm_stderr.err"
-    
-    while [[ $attempt -lt $max_attempts ]]; do
-        log_debug "Generating key points (attempt $((attempt + 1))/$max_attempts)"
-        
-        llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
-        local exit_code=$?
-        
-        if [[ $exit_code -eq 0 ]]; then
-            key_points="$llm_response"
-            
-            local line_count
-            line_count=$(echo "$key_points" | grep -c "^- " || true)
-            line_count=${line_count:-0}
-            
-            if [[ $line_count -ge 1 ]]; then
-                echo "$key_points"
-                return 0
-            fi
-            
-            log_warn "No valid key points generated, retrying..."
-        else
-            log_warn "Key points generation failed: $(cat "$llm_err_file" 2>/dev/null || true)"
-        fi
-        
-        attempt=$((attempt + 1))
-    done
-    
-    # Return whatever we got, even if no valid bullets
-    if [[ -n "$key_points" ]]; then
+  local user_prompt="${PROMPT_USER_KEYPOINTS:-$PROMPT_USER_KEYPOINTS_DEFAULT}"
+  user_prompt="${user_prompt//\{\{MIN_BULLETS\}\}/$min_bullets}"
+  user_prompt="${user_prompt//\{\{MAX_BULLETS\}\}/$max_bullets}"
+  user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
+  user_prompt="${user_prompt//\{\{FINAL_SUMMARY\}\}/$(escape_repl "$final_summary")}"
+  user_prompt="${user_prompt//\{\{CHUNK_SUMMARIES\}\}/$(escape_repl "$chunk_summaries")}"
+
+  local max_attempts=3
+  local attempt=0
+  local key_points=""
+  local llm_response=""
+  # stderr to file — see summarize_chunk: never merge it into the key points
+  local llm_err_file="${TMP_BASE}/llm_stderr.err"
+
+  while [[ $attempt -lt $max_attempts ]]; do
+    log_debug "Generating key points (attempt $((attempt + 1))/$max_attempts)"
+
+    llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
+    local exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
+      key_points="$llm_response"
+
+      local line_count
+      line_count=$(echo "$key_points" | grep -c "^- " || true)
+      line_count=${line_count:-0}
+
+      if [[ $line_count -ge 1 ]]; then
         echo "$key_points"
         return 0
+      fi
+
+      log_warn "No valid key points generated, retrying..."
+    else
+      log_warn "Key points generation failed: $(cat "$llm_err_file" 2>/dev/null || true)"
     fi
-    
-    log_error "Failed to generate key points after ${max_attempts} attempts"
-    return 1
+
+    attempt=$((attempt + 1))
+  done
+
+  # Return whatever we got, even if no valid bullets
+  if [[ -n "$key_points" ]]; then
+    echo "$key_points"
+    return 0
+  fi
+
+  log_error "Failed to generate key points after ${max_attempts} attempts"
+  return 1
 }
 
 # Asks the LLM for the recommended words-per-chunk value, given the transcript
@@ -998,777 +924,779 @@ generate_key_points() {
 # answer could be obtained (LLM error, empty or non-numeric reply) so the
 # caller can fall back to the configured CHUNK_WORDS.
 recommend_chunk_words() {
-    local input_words="$1"
-    local default_words="${2:-$CHUNK_WORDS}"
+  local input_words="$1"
+  local default_words="${2:-$CHUNK_WORDS}"
 
-    local system_prompt="${PROMPT_SYSTEM_CHUNKSIZE:-$PROMPT_SYSTEM_CHUNKSIZE_DEFAULT}"
-    local user_prompt="${PROMPT_USER_CHUNKSIZE:-$PROMPT_USER_CHUNKSIZE_DEFAULT}"
-    user_prompt="${user_prompt//\{\{INPUT_WORDS\}\}/$(escape_repl "$input_words")}"
-    user_prompt="${user_prompt//\{\{DEFAULT_CHUNK_WORDS\}\}/$(escape_repl "$default_words")}"
+  local system_prompt="${PROMPT_SYSTEM_CHUNKSIZE:-$PROMPT_SYSTEM_CHUNKSIZE_DEFAULT}"
+  local user_prompt="${PROMPT_USER_CHUNKSIZE:-$PROMPT_USER_CHUNKSIZE_DEFAULT}"
+  user_prompt="${user_prompt//\{\{INPUT_WORDS\}\}/$(escape_repl "$input_words")}"
+  user_prompt="${user_prompt//\{\{DEFAULT_CHUNK_WORDS\}\}/$(escape_repl "$default_words")}"
 
-    local max_attempts=3
-    local attempt=0
-    # stderr is captured to a file, never merged into the response: only the
-    # model's stdout may be parsed for the number (2>&1 would also capture
-    # debug traces/warnings whose digits could be mistaken for the answer)
-    local stderr_file="${TMP_BASE}/chunksize_recommend_$$.err"
+  local max_attempts=3
+  local attempt=0
+  # stderr is captured to a file, never merged into the response: only the
+  # model's stdout may be parsed for the number (2>&1 would also capture
+  # debug traces/warnings whose digits could be mistaken for the answer)
+  local stderr_file="${TMP_BASE}/chunksize_recommend_$$.err"
 
-    while [[ $attempt -lt $max_attempts ]]; do
-        log_debug "Requesting chunk-size recommendation (attempt $((attempt + 1))/$max_attempts)"
+  while [[ $attempt -lt $max_attempts ]]; do
+    log_debug "Requesting chunk-size recommendation (attempt $((attempt + 1))/$max_attempts)"
 
-        local response=""
-        local error_output=""
-        response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$stderr_file")
-        local exit_code=$?
-        error_output=$(cat "$stderr_file" 2>/dev/null || true)
+    local response=""
+    local error_output=""
+    response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$stderr_file")
+    local exit_code=$?
+    error_output=$(cat "$stderr_file" 2>/dev/null || true)
 
-        if [[ $exit_code -eq 0 ]]; then
-            local recommended
-            recommended=$(printf '%s' "$response" | grep -oE '[0-9]+' | head -1 || true)
-            if [[ -n "$recommended" ]]; then
-                # 10# avoids octal interpretation of values like 0900
-                recommended=$((10#$recommended))
-                if [[ $recommended -gt 0 ]]; then
-                    rm -f "$stderr_file"
-                    echo "$recommended"
-                    return 0
-                fi
-            fi
-            log_warn "No valid chunk-size recommendation in response: ${response:0:120}"
-        else
-            log_warn "Chunk-size recommendation failed: ${error_output:-$response}"
+    if [[ $exit_code -eq 0 ]]; then
+      local recommended
+      recommended=$(printf '%s' "$response" | grep -oE '[0-9]+' | head -1 || true)
+      if [[ -n "$recommended" ]]; then
+        # 10# avoids octal interpretation of values like 0900
+        recommended=$((10#$recommended))
+        if [[ $recommended -gt 0 ]]; then
+          rm -f "$stderr_file"
+          echo "$recommended"
+          return 0
         fi
+      fi
+      log_warn "No valid chunk-size recommendation in response: ${response:0:120}"
+    else
+      log_warn "Chunk-size recommendation failed: ${error_output:-$response}"
+    fi
 
-        attempt=$((attempt + 1))
-    done
+    attempt=$((attempt + 1))
+  done
 
-    rm -f "$stderr_file"
-    return 1
+  rm -f "$stderr_file"
+  return 1
 }
 
 split_transcript() {
-    local transcript_file="$1"
-    local target_chunk_words="$2"
-    local video_id="$3"
-    
-    local chunks_dir="${TMP_BASE}/chunks_${video_id}_$$"
-    mkdir -p "$chunks_dir"
-    
-    log_debug "Splitting transcript file: $transcript_file (target: $target_chunk_words words per chunk)"
-    
-    # Use awk for efficient word-based chunk splitting
-    local chunk_num=0
-    local current_words=0
-    
-    # awk script: splits text into chunks of target_chunk_words words
-    # Outputs chunk files and prints the chunks_dir at the end
-    awk -v target="$target_chunk_words" -v dir="$chunks_dir" -v video="$video_id" '
+  local transcript_file="$1"
+  local target_chunk_words="$2"
+  local video_id="$3"
+
+  local chunks_dir="${TMP_BASE}/chunks_${video_id}_$$"
+  mkdir -p "$chunks_dir"
+
+  log_debug "Splitting transcript file: $transcript_file (target: $target_chunk_words words per chunk)"
+
+  # Use awk for efficient word-based chunk splitting
+  local chunk_num=0
+  local current_words=0
+
+  # awk script: splits text into chunks of target_chunk_words words
+  # Outputs chunk files and prints the chunks_dir at the end
+  awk -v target="$target_chunk_words" -v dir="$chunks_dir" -v video="$video_id" '
     BEGIN {
-        chunk_num = 0
-        current_words = 0
-        chunk_file = dir "/chunk_" chunk_num ".txt"
-        write_chunk_header(chunk_file)
-    }
-    {
-        # Split line into words
-        n = split($0, words, /[[:space:]]+/)
-        for (i = 1; i <= n; i++) {
-            word = words[i]
-            if (word ~ /^[[:space:]]*$/) continue  # skip empty
-            
-            if (current_words > 0 && current_words >= target) {
-                # Start new chunk
-                chunk_num++
-                chunk_file = dir "/chunk_" chunk_num ".txt"
-                write_chunk_header(chunk_file)
-                current_words = 0
-            }
-            
-            # Write word to chunk file (without trailing newline, space-separated)
-            if (current_words == 0) {
-                printf "%s", word > chunk_file
-            } else {
-                printf " %s", word > chunk_file
-            }
-            current_words++
-        }
+      chunk_num = 0
+      current_words = 0
+      chunk_file = dir "/chunk_" chunk_num ".txt"
+      write_chunk_header(chunk_file)
+      }
+      {
+      # Split line into words
+      n = split($0, words, /[[:space:]]+/)
+      for (i = 1; i <= n; i++) {
+        word = words[i]
+        if (word ~ /^[[:space:]]*$/) continue  # skip empty
+
+          if (current_words > 0 && current_words >= target) {
+            # Start new chunk
+            chunk_num++
+            chunk_file = dir "/chunk_" chunk_num ".txt"
+            write_chunk_header(chunk_file)
+            current_words = 0
+          }
+
+          # Write word to chunk file (without trailing newline, space-separated)
+          if (current_words == 0) {
+            printf "%s", word > chunk_file
+          } else {
+            printf " %s", word > chunk_file
+          }
+          current_words++
+      }
     }
     END {
-        # Print chunks directory for later use
-        print dir
+      # Print chunks directory for later use
+      print dir
     }
-    
-    function write_chunk_header(file,    tmp) {
-        # Truncate/create the file
-        close(file)
-        print > file
+
+  function write_chunk_header(file, tmp) {
+    # Truncate/create the file
+    close(file)
+    print > file
     }
-    ' "$transcript_file"
-    
-    local chunk_count
-    chunk_count=$(ls -1 "${chunks_dir}"/chunk_*.txt 2>/dev/null | wc -l)
-    log_debug "Created ${chunk_count} chunks"
+  ' "$transcript_file"
+
+  local chunk_count
+  chunk_count=$(ls -1 "${chunks_dir}"/chunk_*.txt 2>/dev/null | wc -l)
+  log_debug "Created ${chunk_count} chunks"
 }
 
 summarize_video() {
-    local url="$1"
-    
-    source "${LIB_DIR}/ollama.sh"
-    source "${LIB_DIR}/cache.sh"
-    source "${LIB_DIR}/transcript.sh"
-    source "${LIB_DIR}/whisper.sh"
-    
-    # Re-apply backend overrides after re-sourcing ollama.sh,
-    # otherwise ollama_chat would be reset to the local Ollama backend.
-    if [[ "$LLM_BACKEND" == "omniroute" ]]; then
-        ollama_chat() {
-            omniroute_chat "$@"
+  local url="$1"
+
+  source "${LIB_DIR}/ollama.sh"
+  source "${LIB_DIR}/cache.sh"
+  source "${LIB_DIR}/transcript.sh"
+  source "${LIB_DIR}/whisper.sh"
+
+  # Re-apply backend overrides after re-sourcing ollama.sh,
+  # otherwise ollama_chat would be reset to the local Ollama backend.
+  if [[ "$LLM_BACKEND" == "omniroute" ]]; then
+    ollama_chat() {
+      omniroute_chat "$@"
+    }
+  fi
+
+  init_stats
+  # Per-video reports (Telegram message, --include-stats document) show only
+  # this video's stats (current minus snapshot); the final --stats block
+  # keeps showing cumulative session totals.
+  stats_snapshot
+
+  cache_init
+
+  local video_id
+  video_id=$(extract_video_id "$url")
+
+  log_info "Processing video: $url (ID: $video_id)"
+
+  # Skip if video ID already exists in external tracking file (unless forced)
+  if [[ "$FORCE" == "false" ]] && video_id_exists_in_external_file "$video_id"; then
+    log_info "Video ID $video_id already processed, skipping"
+    return 0
+  fi
+
+  if [[ -f "$url" ]]; then
+    log_info "Processing batch file with URLs"
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+        summarize_video "$line"
+      done < "$url"
+      return
+  fi
+
+  if is_playlist "$url"; then
+    log_info "Processing playlist"
+    local videos
+    videos=$(get_playlist_videos "$url")
+      while IFS= read -r video_url; do
+        [[ -z "$video_url" ]] && continue
+          summarize_video "$video_url" || {
+            log_warn "Failed to process video: $video_url"
+            continue
         }
+      done <<< "$videos"
+      return
+  fi
+
+  # Per-video timers for session statistics. "processing" spans from the moment
+  # processing of this video URL starts until summarization and statistics
+  # collection complete (just before the output document is rendered).
+  declare -f stats_tic >/dev/null 2>&1 && stats_tic "processing" || true
+
+  local title
+  title=$(get_video_title "$url")
+  log_info "Video title: $title"
+
+  if [[ "$FORCE" == "false" ]] && ! [[ "$IGNORE_PROCESSED" == "true" ]] && cache_is_complete "$video_id" "$INCLUDE_SUMMARY" "$INCLUDE_KEY_POINTS"; then
+    log_info "Using cached summary"
+    # Generate checksum for the cached content to verify integrity
+    local cache_checksum
+    cache_checksum=$(md5sum "$(cache_get_path "$video_id")" 2>/dev/null | awk '{print $1}')
+    local cached
+    if cache_read_with_checksum "$video_id" "$cache_checksum" cached; then
+      handle_output "$title" "$cached"
+    else
+      # Fallback: read cache even if checksum doesn't match (for old caches)
+      cached=$(cache_read "$video_id")
+      handle_output "$title" "$cached"
     fi
-    
-    init_stats
-    # Per-video reports (Telegram message, --include-stats document) show only
-    # this video's stats (current minus snapshot); the final --stats block
-    # keeps showing cumulative session totals.
-    stats_snapshot
-    
-    cache_init
-    
-    local video_id
-    video_id=$(extract_video_id "$url")
-    
-    log_info "Processing video: $url (ID: $video_id)"
-    
-    # Skip if video ID already exists in external tracking file (unless forced)
-    if [[ "$FORCE" == "false" ]] && video_id_exists_in_external_file "$video_id"; then
-        log_info "Video ID $video_id already processed, skipping"
-        return 0
+      declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
+      return
+  fi
+
+  # If the user explicitly set a target language (--language or TARGET_LANGUAGE),
+  # respect it. Otherwise, detect the audio language: Romanian audio ->
+  # Romanian transcript + Romanian summary; anything else -> English.
+  if [[ "${LANG_EXPLICIT:-false}" != "true" ]]; then
+    local audio_lang
+    audio_lang=$(detect_audio_language "$url")
+    TRANSCRIPT_LANG="$audio_lang"
+    TARGET_LANGUAGE="$audio_lang"
+    log_info "Detected audio language: $audio_lang"
+  fi
+
+  TRANSLATE_FROM=""
+  log_info "Fetching transcript..."
+  local transcript_file
+  transcript_file=$(fetch_transcript_with_fallback "$url" "$video_id" "$TRANSCRIPT_LANG")
+
+  if [[ ! -f "$transcript_file" ]]; then
+    log_error "Failed to fetch transcript"
+    return 1
+  fi
+
+  # fetch_transcript_with_fallback() runs in a subshell above, so read the
+  # source/detected-language markers it persisted for us.
+  if [[ -n "${METADATA_TMP:-}" ]]; then
+    [[ -f "${METADATA_TMP}/${video_id}.transcript_source" ]] && \
+      TRANSCRIPT_SOURCE="$(cat "${METADATA_TMP}/${video_id}.transcript_source")"
+    [[ -f "${METADATA_TMP}/${video_id}.transcript_lang" ]] && \
+      TRANSCRIPT_DETECTED_LANG="$(cat "${METADATA_TMP}/${video_id}.transcript_lang")"
+  fi
+
+  # Req 2.1/2.6: if the transcript source language is neither Romanian nor
+  # English and the user did not explicitly pick a target language, force an
+  # English output (the summary is produced as a translation to English).
+  if [[ "${LANG_EXPLICIT:-false}" != "true" && -n "${TRANSCRIPT_DETECTED_LANG:-}" ]]; then
+    case "$TRANSCRIPT_DETECTED_LANG" in
+      ro|en)
+        ;;
+      *)
+        TRANSLATE_FROM="$TRANSCRIPT_DETECTED_LANG"
+        TARGET_LANGUAGE="en"
+        log_info "Transcript language '${TRANSCRIPT_DETECTED_LANG}' differs from target; summarizing with translation to English"
+        ;;
+    esac
+  fi
+  [[ -n "$TRANSCRIPT_SOURCE" ]] && log_info "Transcript source: $TRANSCRIPT_SOURCE"
+
+  local input_words
+  input_words=$(get_transcript_word_count "$transcript_file")
+  log_info "Transcript: ${input_words} words"
+
+  local effective_chunk_words="$CHUNK_WORDS"
+  if [[ "$AUTO_CHUNK" == "true" ]]; then
+    local recommended_chunk_words=""
+    if recommended_chunk_words=$(recommend_chunk_words "$input_words"); then
+      effective_chunk_words="$recommended_chunk_words"
+      log_info "LLM recommended chunk size: ${effective_chunk_words} words (configured: ${CHUNK_WORDS})"
+    else
+      log_warn "No chunk-size recommendation from LLM; using configured CHUNK_WORDS=${CHUNK_WORDS}"
     fi
-    
-    if [[ -f "$url" ]]; then
-        log_info "Processing batch file with URLs"
-        while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            summarize_video "$line"
-        done < "$url"
-        return
-    fi
-    
-    if is_playlist "$url"; then
-        log_info "Processing playlist"
-        local videos
-        videos=$(get_playlist_videos "$url")
-        while IFS= read -r video_url; do
-            [[ -z "$video_url" ]] && continue
-            summarize_video "$video_url" || {
-                log_warn "Failed to process video: $video_url"
-                continue
-            }
-        done <<< "$videos"
-        return
+  fi
+
+  log_info "Splitting transcript into chunks (target ${effective_chunk_words} words per chunk)..."
+  local chunks_dir
+  chunks_dir=$(split_transcript "$transcript_file" "$effective_chunk_words" "$video_id")
+
+  local chunk_count
+  chunk_count=$(ls -1 "${chunks_dir}"/chunk_*.txt 2>/dev/null | wc -l)
+  log_info "Created $chunk_count chunks"
+
+  local mapped_chunks_file="${TMP_BASE}/mapped_${video_id}_$$.txt"
+  echo -n "" > "$mapped_chunks_file"
+
+  local i=1
+  for chunk_file in "${chunks_dir}"/chunk_*.txt; do
+    local chunk_text
+    chunk_text=$(cat "$chunk_file")
+
+    log_debug "Chunk text length: ${#chunk_text} chars, words: $(echo "$chunk_text" | wc -w)"
+    log_debug "Chunk preview: ${chunk_text:0:200}..."
+
+    local word_count
+    word_count=$(wc -w < "$chunk_file")
+
+    local chunk_context
+    chunk_context="Chunk $i of $chunk_count. ${word_count} words. Summarize faithfully and avoid duplication."
+
+    log_info "Summarizing chunk $i/$chunk_count..."
+
+    local chunk_summary
+    if chunk_summary=$(summarize_chunk "$chunk_text" "$chunk_context" "$TARGET_LANGUAGE"); then
+      echo "[Chunk $i]" >> "$mapped_chunks_file"
+      echo "$chunk_summary" >> "$mapped_chunks_file"
+      echo "---" >> "$mapped_chunks_file"
+    else
+      log_error "Failed to summarize chunk $i"
+      rm -rf "$chunks_dir" "$mapped_chunks_file"
+      return 1
     fi
 
-    # Per-video timers for session statistics. "processing" spans from the moment
-    # processing of this video URL starts until summarization and statistics
-    # collection complete (just before the output document is rendered).
-    declare -f stats_tic >/dev/null 2>&1 && stats_tic "processing" || true
+    i=$((i + 1))
+  done
 
-    local title
-    title=$(get_video_title "$url")
-    log_info "Video title: $title"
-    
-    if [[ "$FORCE" == "false" ]] && ! [[ "$IGNORE_PROCESSED" == "true" ]] && cache_is_complete "$video_id" "$INCLUDE_SUMMARY" "$INCLUDE_KEY_POINTS"; then
-        log_info "Using cached summary"
-        # Generate checksum for the cached content to verify integrity
-        local cache_checksum
-        cache_checksum=$(md5sum "$(cache_get_path "$video_id")" 2>/dev/null | awk '{print $1}')
-        local cached
-        if cache_read_with_checksum "$video_id" "$cache_checksum" cached; then
-            handle_output "$title" "$cached"
-        else
-            # Fallback: read cache even if checksum doesn't match (for old caches)
-            cached=$(cache_read "$video_id")
-            handle_output "$title" "$cached"
-        fi
-        declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
-        return
-    fi
-    
-    # If the user explicitly set a target language (--language or TARGET_LANGUAGE),
-    # respect it. Otherwise, detect the audio language: Romanian audio ->
-    # Romanian transcript + Romanian summary; anything else -> English.
-    if [[ "${LANG_EXPLICIT:-false}" != "true" ]]; then
-        local audio_lang
-        audio_lang=$(detect_audio_language "$url")
-        TRANSCRIPT_LANG="$audio_lang"
-        TARGET_LANGUAGE="$audio_lang"
-        log_info "Detected audio language: $audio_lang"
-    fi
-
-    TRANSLATE_FROM=""
-    log_info "Fetching transcript..."
-    local transcript_file
-    transcript_file=$(fetch_transcript_with_fallback "$url" "$video_id" "$TRANSCRIPT_LANG")
-
-    if [[ ! -f "$transcript_file" ]]; then
-        log_error "Failed to fetch transcript"
+  local final_summary=""
+  if [[ "$INCLUDE_SUMMARY" == "true" ]]; then
+    if [[ $chunk_count -eq 1 ]]; then
+      # Single chunk: use the chunk summary directly without redundant aggregation
+      final_summary=$(sed '/^\[Chunk 1\]$/d; /^---$/d' "$mapped_chunks_file" | sed '/^[[:space:]]*$/d')
+    else
+      local length_profile
+      length_profile=$(get_length_profile "$SUMMARY_LENGTH")
+      local length_guidance
+      length_guidance=$(echo "$length_profile" | head -1)
+      log_info "Aggregating chunk summaries..."
+      if ! final_summary=$(aggregate_summary "$mapped_chunks_file" "$chunk_count" "$length_guidance" "$TARGET_LANGUAGE"); then
+        log_error "Failed to aggregate summary"
+        rm -rf "$chunks_dir" "$mapped_chunks_file"
         return 1
+      fi
     fi
+  fi
 
-    # fetch_transcript_with_fallback() runs in a subshell above, so read the
-    # source/detected-language markers it persisted for us.
-    if [[ -n "${METADATA_TMP:-}" ]]; then
-        [[ -f "${METADATA_TMP}/${video_id}.transcript_source" ]] && \
-            TRANSCRIPT_SOURCE="$(cat "${METADATA_TMP}/${video_id}.transcript_source")"
-        [[ -f "${METADATA_TMP}/${video_id}.transcript_lang" ]] && \
-            TRANSCRIPT_DETECTED_LANG="$(cat "${METADATA_TMP}/${video_id}.transcript_lang")"
+  local key_points=""
+  if [[ "$INCLUDE_KEY_POINTS" == "true" ]]; then
+    log_info "Generating key points..."
+    if ! key_points=$(generate_key_points "$mapped_chunks_file" "$final_summary" "$TARGET_LANGUAGE"); then
+      log_error "Failed to generate key points"
+      rm -rf "$chunks_dir" "$mapped_chunks_file"
+      return 1
     fi
+  fi
 
-    # Req 2.1/2.6: if the transcript source language is neither Romanian nor
-    # English and the user did not explicitly pick a target language, force an
-    # English output (the summary is produced as a translation to English).
-    if [[ "${LANG_EXPLICIT:-false}" != "true" && -n "${TRANSCRIPT_DETECTED_LANG:-}" ]]; then
-        case "$TRANSCRIPT_DETECTED_LANG" in
-            ro|en) ;;
-            *)
-                TRANSLATE_FROM="$TRANSCRIPT_DETECTED_LANG"
-                TARGET_LANGUAGE="en"
-                log_info "Transcript language '${TRANSCRIPT_DETECTED_LANG}' differs from target; summarizing with translation to English"
-                ;;
-        esac
-    fi
-    [[ -n "$TRANSCRIPT_SOURCE" ]] && log_info "Transcript source: $TRANSCRIPT_SOURCE"
-    
-    local input_words
-    input_words=$(get_transcript_word_count "$transcript_file")
-    log_info "Transcript: ${input_words} words"
-    
-    local effective_chunk_words="$CHUNK_WORDS"
-    if [[ "$AUTO_CHUNK" == "true" ]]; then
-        local recommended_chunk_words=""
-        if recommended_chunk_words=$(recommend_chunk_words "$input_words"); then
-            effective_chunk_words="$recommended_chunk_words"
-            log_info "LLM recommended chunk size: ${effective_chunk_words} words (configured: ${CHUNK_WORDS})"
-        else
-            log_warn "No chunk-size recommendation from LLM; using configured CHUNK_WORDS=${CHUNK_WORDS}"
-        fi
-    fi
-    
-    log_info "Splitting transcript into chunks (target ${effective_chunk_words} words per chunk)..."
-    local chunks_dir
-    chunks_dir=$(split_transcript "$transcript_file" "$effective_chunk_words" "$video_id")
-    
-    local chunk_count
-    chunk_count=$(ls -1 "${chunks_dir}"/chunk_*.txt 2>/dev/null | wc -l)
-    log_info "Created $chunk_count chunks"
-    
-    local mapped_chunks_file="${TMP_BASE}/mapped_${video_id}_$$.txt"
-    echo -n "" > "$mapped_chunks_file"
-    
-    local i=1
-    for chunk_file in "${chunks_dir}"/chunk_*.txt; do
-        local chunk_text
-        chunk_text=$(cat "$chunk_file")
-        
-        log_debug "Chunk text length: ${#chunk_text} chars, words: $(echo "$chunk_text" | wc -w)"
-        log_debug "Chunk preview: ${chunk_text:0:200}..."
-        
-        local word_count
-        word_count=$(wc -w < "$chunk_file")
-        
-        local chunk_context
-        chunk_context="Chunk $i of $chunk_count. ${word_count} words. Summarize faithfully and avoid duplication."
-        
-        log_info "Summarizing chunk $i/$chunk_count..."
-        
-        local chunk_summary
-        if chunk_summary=$(summarize_chunk "$chunk_text" "$chunk_context" "$TARGET_LANGUAGE"); then
-            echo "[Chunk $i]" >> "$mapped_chunks_file"
-            echo "$chunk_summary" >> "$mapped_chunks_file"
-            echo "---" >> "$mapped_chunks_file"
-        else
-            log_error "Failed to summarize chunk $i"
-            rm -rf "$chunks_dir" "$mapped_chunks_file"
-            return 1
-        fi
-        
-        i=$((i + 1))
-    done
-    
-    local final_summary=""
-    if [[ "$INCLUDE_SUMMARY" == "true" ]]; then
-        if [[ $chunk_count -eq 1 ]]; then
-            # Single chunk: use the chunk summary directly without redundant aggregation
-            final_summary=$(sed '/^\[Chunk 1\]$/d; /^---$/d' "$mapped_chunks_file" | sed '/^[[:space:]]*$/d')
-        else
-            local length_profile
-            length_profile=$(get_length_profile "$SUMMARY_LENGTH")
-            local length_guidance
-            length_guidance=$(echo "$length_profile" | head -1)
-            log_info "Aggregating chunk summaries..."
-            if ! final_summary=$(aggregate_summary "$mapped_chunks_file" "$chunk_count" "$length_guidance" "$TARGET_LANGUAGE"); then
-                log_error "Failed to aggregate summary"
-                rm -rf "$chunks_dir" "$mapped_chunks_file"
-                return 1
-            fi
-        fi
-    fi
-    
-    local key_points=""
-    if [[ "$INCLUDE_KEY_POINTS" == "true" ]]; then
-        log_info "Generating key points..."
-        if ! key_points=$(generate_key_points "$mapped_chunks_file" "$final_summary" "$TARGET_LANGUAGE"); then
-            log_error "Failed to generate key points"
-            rm -rf "$chunks_dir" "$mapped_chunks_file"
-            return 1
-        fi
-    fi
+  # Output words = words of the summarization text (the summary; the key
+  # points when produced without a summary, e.g. --key-points-only).
+  # Calculated before updating stats so the markdown includes the right numbers.
+  local summarization_text="$final_summary"
+  if [[ -z "$summarization_text" ]]; then
+    summarization_text="$key_points"
+  fi
+  local output_words
+  output_words=$(printf '%s' "$summarization_text" | wc -w)
 
-    # Output words = words of the summarization text (the summary; the key
-    # points when produced without a summary, e.g. --key-points-only).
-    # Calculated before updating stats so the markdown includes the right numbers.
-    local summarization_text="$final_summary"
-    if [[ -z "$summarization_text" ]]; then
-        summarization_text="$key_points"
-    fi
-    local output_words
-    output_words=$(printf '%s' "$summarization_text" | wc -w)
+  # Update session statistics before generating the final markdown output
+  update_video_stats "$input_words" "$output_words"
 
-    # Update session statistics before generating the final markdown output
-    update_video_stats "$input_words" "$output_words"
+  # Stop the per-video timer before the document is rendered so the embedded
+  # --include-stats block shows this video's completed processing time
+  # (delivery is excluded; audio generation has its own TTS timer and still
+  # appears in the Telegram message sent after delivery).
+  declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
 
-    # Stop the per-video timer before the document is rendered so the embedded
-    # --include-stats block shows this video's completed processing time
-    # (delivery is excluded; audio generation has its own TTS timer and still
-    # appears in the Telegram message sent after delivery).
-    declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
+  local output
+  output=$(format_output "$title" "$final_summary" "$key_points")
 
-    local output
-    output=$(format_output "$title" "$final_summary" "$key_points")
+  handle_output "$title" "$output"
 
-    handle_output "$title" "$output"
+  if [[ "$SEND_TELEGRAM" == "true" ]]; then
+    local esc_title
+    esc_title=$(printf '%s' "$title" | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
+    local telegram_body
+    # Only the title is wrapped: the statistics block is pre-formatted for
+    # a 29-column <pre> block, so folding it would break its alignment.
+    telegram_body=$(printf 'yt-summary - %s' "$esc_title" | fold -s -w 29)
+    telegram_body=$(printf '%s\n%s' "$telegram_body" "$(format_stats_markdown video)")
+    local t_stats
+    printf -v t_stats '<pre>%s\n</pre>' "$telegram_body"
+    send_telegram "$TELEGRAM_CHAT_ID" "$t_stats"
+  fi
 
-    if [[ "$SEND_TELEGRAM" == "true" ]]; then
-        local esc_title
-        esc_title=$(printf '%s' "$title" | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
-        local telegram_body
-        # Only the title is wrapped: the statistics block is pre-formatted for
-        # a 29-column <pre> block, so folding it would break its alignment.
-        telegram_body=$(printf 'yt-summary - %s' "$esc_title" | fold -s -w 29)
-        telegram_body=$(printf '%s\n%s' "$telegram_body" "$(format_stats_markdown video)")
-        local t_stats
-        printf -v t_stats '<pre>%s\n</pre>' "$telegram_body"
-        send_telegram "$TELEGRAM_CHAT_ID" "$t_stats"
-    fi
+  # Do not save summary text file when generating audio
+  if [[ "$SAVE_OUTPUT" == "true" && "$GENERATE_AUDIO" != "true" ]]; then
+    # Generate checksum for the output content
+    local output_checksum
+    output_checksum=$(echo "$output" | md5sum | awk '{print $1}')
+    cache_write_with_checksum "$video_id" "$output" "$output_checksum"
+  fi
 
-    # Do not save summary text file when generating audio
-    if [[ "$SAVE_OUTPUT" == "true" && "$GENERATE_AUDIO" != "true" ]]; then
-        # Generate checksum for the output content
-        local output_checksum
-        output_checksum=$(echo "$output" | md5sum | awk '{print $1}')
-        cache_write_with_checksum "$video_id" "$output" "$output_checksum"
-    fi
-    
-    # Add video ID to external tracking file on successful processing so the
-    # video is skipped on subsequent runs (regardless of print/save/audio mode).
-    # Skip in testing mode
-    if [[ "${TESTING_MODE:-false}" != "true" ]]; then
-        add_video_id_to_external_file "$video_id"
-    fi
-    
-    rm -rf "$chunks_dir" "$mapped_chunks_file"
-    
-    log_info "Completed: $title"
+  # Add video ID to external tracking file on successful processing so the
+  # video is skipped on subsequent runs (regardless of print/save/audio mode).
+  # Skip in testing mode
+  if [[ "${TESTING_MODE:-false}" != "true" ]]; then
+    add_video_id_to_external_file "$video_id"
+  fi
+
+  rm -rf "$chunks_dir" "$mapped_chunks_file"
+
+  log_info "Completed: $title"
 }
 
 format_output() {
-    local title="$1"
-    local summary="$2"
-    local key_points="$3"
-    
-    local output="# ${title}"
-    
-    if [[ -n "$summary" ]] && [[ "$INCLUDE_SUMMARY" == "true" ]]; then
-        output+="
+  local title="$1"
+  local summary="$2"
+  local key_points="$3"
+
+  local output="# ${title}"
+
+  if [[ -n "$summary" ]] && [[ "$INCLUDE_SUMMARY" == "true" ]]; then
+    output+="
 
 ## Summary
 
 ${summary}"
-    fi
-    
-    if [[ -n "$key_points" ]] && [[ "$INCLUDE_KEY_POINTS" == "true" ]]; then
-        output+="
+  fi
+
+  if [[ -n "$key_points" ]] && [[ "$INCLUDE_KEY_POINTS" == "true" ]]; then
+    output+="
 
 ## Key Points
 
 ${key_points}"
-    fi
-    
-    if [[ "$SHOW_STATS_IN_OUTPUT" == "true" ]]; then
-        local stats_md
-        stats_md=$(format_stats_markdown video)
-        output+="
+  fi
+
+  if [[ "$SHOW_STATS_IN_OUTPUT" == "true" ]]; then
+    local stats_md
+    stats_md=$(format_stats_markdown video)
+    output+="
 ${stats_md}"
-    fi
-    
-    echo "$output"
+  fi
+
+  echo "$output"
 }
 
 handle_output() {
-    local title="$1"
-    local output="$2"
-    
-    if [[ "$PRINT_OUTPUT" == "true" && "$GENERATE_AUDIO" != "true" ]]; then
-        echo ""
-        echo "$output"
-    fi
-    
-    if [[ -n "$EMAIL_TO" ]]; then
-        send_email "$EMAIL_TO" "$title" "$output"
+  local title="$1"
+  local output="$2"
+
+  if [[ "$PRINT_OUTPUT" == "true" && "$GENERATE_AUDIO" != "true" ]]; then
+    echo ""
+    echo "$output"
+  fi
+
+  if [[ -n "$EMAIL_TO" ]]; then
+    send_email "$EMAIL_TO" "$title" "$output"
+  fi
+
+  if [[ "$GENERATE_AUDIO" == "true" ]]; then
+    source "${LIB_DIR}/tts.sh"
+    local voice
+    if [[ "$TTS_ENGINE" == "piper" ]]; then
+      voice=$(get_voice_for_language "$TARGET_LANGUAGE" "$AUDIO_VOICE" "$VOICES_DIR") || return 1
+    elif [[ "$TTS_ENGINE" == "edge-tts" ]]; then
+      voice=$(get_edge_tts_voice "$TARGET_LANGUAGE" "$AUDIO_VOICE") || return 1
+      # Check if user mistakenly passed a file path (meant for Piper) to edge-tts
+      if [[ "$voice" == */*.onnx ]] || [[ "$voice" == */* ]] && [[ -f "$voice" ]]; then
+        log_error "Invalid voice for edge-tts: $voice"
+        log_error "For edge-tts, --voice should be a voice name (e.g., 'en-GB-SoniaNeural'), not a file path."
+        log_error "Common English voices: en-GB-SoniaNeural, en-GB-RyanNeural, en-US-EmmaMultilingualNeural"
+        log_error "Use 'edge-tts --list-voices' to see available voices."
+        return 1
+      fi
+    else
+      log_error "Invalid TTS engine: $TTS_ENGINE"
+      return 1
     fi
 
-    if [[ "$GENERATE_AUDIO" == "true" ]]; then
-        source "${LIB_DIR}/tts.sh"
-        local voice
-        if [[ "$TTS_ENGINE" == "piper" ]]; then
-            voice=$(get_voice_for_language "$TARGET_LANGUAGE" "$AUDIO_VOICE" "$VOICES_DIR") || return 1
-        elif [[ "$TTS_ENGINE" == "edge-tts" ]]; then
-            voice=$(get_edge_tts_voice "$TARGET_LANGUAGE" "$AUDIO_VOICE") || return 1
-            # Check if user mistakenly passed a file path (meant for Piper) to edge-tts
-            if [[ "$voice" == */*.onnx ]] || [[ "$voice" == */* ]] && [[ -f "$voice" ]]; then
-                log_error "Invalid voice for edge-tts: $voice"
-                log_error "For edge-tts, --voice should be a voice name (e.g., 'en-GB-SoniaNeural'), not a file path."
-                log_error "Common English voices: en-GB-SoniaNeural, en-GB-RyanNeural, en-US-EmmaMultilingualNeural"
-                log_error "Use 'edge-tts --list-voices' to see available voices."
-                return 1
-            fi
+    local output_path
+    if [[ -n "$AUDIO_OUTPUT" ]]; then
+      if [[ -d "$AUDIO_OUTPUT" ]]; then
+        local safe_title
+        safe_title=$(LC_ALL=C.UTF-8 echo "$title" | sed 's/[^[:alnum:] _-]/_/g' | sed 's/[ _-]\+/_/g' | sed 's/^_//' | sed 's/_$//' | head -c 50)
+        if [[ -n "$safe_title" ]] && [[ "$safe_title" != "Unknown_Video" ]]; then
+          output_path="${AUDIO_OUTPUT%/}/${safe_title}.${AUDIO_FORMAT}"
         else
-            log_error "Invalid TTS engine: $TTS_ENGINE"
-            return 1
+          output_path="${AUDIO_OUTPUT%/}/$(date +%Y%m%d_%H%M%S).${AUDIO_FORMAT}"
         fi
-
-        local output_path
-        if [[ -n "$AUDIO_OUTPUT" ]]; then
-            if [[ -d "$AUDIO_OUTPUT" ]]; then
-                local safe_title
-                safe_title=$(LC_ALL=C.UTF-8 echo "$title" | sed 's/[^[:alnum:] _-]/_/g' | sed 's/[ _-]\+/_/g' | sed 's/^_//' | sed 's/_$//' | head -c 50)
-                if [[ -n "$safe_title" ]] && [[ "$safe_title" != "Unknown_Video" ]]; then
-                    output_path="${AUDIO_OUTPUT%/}/${safe_title}.${AUDIO_FORMAT}"
-                else
-                    output_path="${AUDIO_OUTPUT%/}/$(date +%Y%m%d_%H%M%S).${AUDIO_FORMAT}"
-                fi
-            else
-                output_path="$AUDIO_OUTPUT"
-            fi
-        else
-            local safe_title
-            safe_title=$(LC_ALL=C.UTF-8 echo "$title" | sed 's/[^[:alnum:] _-]/_/g' | sed 's/[ _-]\+/_/g' | sed 's/^_//' | sed 's/_$//' | head -c 50)
-            if [[ -n "$safe_title" ]] && [[ "$safe_title" != "Unknown_Video" ]]; then
-                output_path="./${safe_title}.${AUDIO_FORMAT}"
-            else
-                output_path="./$(date +%Y%m%d_%H%M%S).${AUDIO_FORMAT}"
-            fi
-        fi
-
-        declare -f stats_tic >/dev/null 2>&1 && stats_tic "tts" || true
-        generate_audio "$output" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"
-        declare -f stats_toc >/dev/null 2>&1 && stats_toc "tts" || true
+      else
+        output_path="$AUDIO_OUTPUT"
+      fi
+    else
+      local safe_title
+      safe_title=$(LC_ALL=C.UTF-8 echo "$title" | sed 's/[^[:alnum:] _-]/_/g' | sed 's/[ _-]\+/_/g' | sed 's/^_//' | sed 's/_$//' | head -c 50)
+      if [[ -n "$safe_title" ]] && [[ "$safe_title" != "Unknown_Video" ]]; then
+        output_path="./${safe_title}.${AUDIO_FORMAT}"
+      else
+        output_path="./$(date +%Y%m%d_%H%M%S).${AUDIO_FORMAT}"
+      fi
     fi
+
+    declare -f stats_tic >/dev/null 2>&1 && stats_tic "tts" || true
+    generate_audio "$output" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"
+    declare -f stats_toc >/dev/null 2>&1 && stats_toc "tts" || true
+  fi
 }
 
 send_email() {
-    local to="$1"
-    local subject="$2"
-    local body="$3"
-    
-    local from="${EMAIL_FROM:-$to}"
-    local mailer=""
-    
-    if command -v sendmail &>/dev/null; then
-        mailer="sendmail"
-        echo -e "From: ${from}\nTo: ${to}\nSubject: ${subject}\n\n${body}" | sendmail -t
-    elif command -v mail &>/dev/null; then
-        mailer="mail"
-        echo "$body" | mail -s "$subject" "$to"
-    elif command -v mutt &>/dev/null; then
-        mailer="mutt"
-        echo "$body" | mutt -s "$subject" "$to"
-    else
-        log_error "No email client found. Install sendmail, mail, or mutt."
-        log_error "Falling back to printing."
-        echo ""
-        echo "=== EMAIL CONTENT (not sent) ==="
-        echo "To: $to"
-        echo "From: $from"
-        echo "Subject: $subject"
-        echo ""
-        echo "$body"
-        return 1
-    fi
-    
-    log_info "Email sent via $mailer to $to"
+  local to="$1"
+  local subject="$2"
+  local body="$3"
+
+  local from="${EMAIL_FROM:-$to}"
+  local mailer=""
+
+  if command -v sendmail &>/dev/null; then
+    mailer="sendmail"
+    echo -e "From: ${from}\nTo: ${to}\nSubject: ${subject}\n\n${body}" | sendmail -t
+  elif command -v mail &>/dev/null; then
+    mailer="mail"
+    echo "$body" | mail -s "$subject" "$to"
+  elif command -v mutt &>/dev/null; then
+    mailer="mutt"
+    echo "$body" | mutt -s "$subject" "$to"
+  else
+    log_error "No email client found. Install sendmail, mail, or mutt."
+    log_error "Falling back to printing."
+    echo ""
+    echo "=== EMAIL CONTENT (not sent) ==="
+    echo "To: $to"
+    echo "From: $from"
+    echo "Subject: $subject"
+    echo ""
+    echo "$body"
+    return 1
+  fi
+
+  log_info "Email sent via $mailer to $to"
 }
 
 send_telegram() {
-    local chat_id="$1"
-    local text="$2"
+  local chat_id="$1"
+  local text="$2"
 
-    if [[ -z "$TELEGRAM_BOT_TOKEN" ]] || [[ -z "$chat_id" ]]; then
-        log_warn "Telegram not sent: missing bot token or chat_id"
-        return 0
-    fi
+  if [[ -z "$TELEGRAM_BOT_TOKEN" ]] || [[ -z "$chat_id" ]]; then
+    log_warn "Telegram not sent: missing bot token or chat_id"
+    return 0
+  fi
 
-    local api_url="${TELEGRAM_API_URL}/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
+  local api_url="${TELEGRAM_API_URL}/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
 
-    if curl -s -X POST "$api_url" \
-        --data-urlencode "chat_id=${chat_id}" \
-        --data-urlencode "parse_mode=HTML" \
-        --data-urlencode "text=${text}" \
+  if curl -s -X POST "$api_url" --data-urlencode "chat_id=${chat_id}" --data-urlencode "parse_mode=HTML" --data-urlencode "text=${text}" \
         >/dev/null 2>&1; then
-        log_info "Telegram message sent"
-    else
-        log_warn "Failed to send Telegram message"
-    fi
+    log_info "Telegram message sent"
+  else
+    log_warn "Failed to send Telegram message"
+  fi
 }
 
 send_mqtt() {
-    local payload="$1"
+  local payload="$1"
 
-    if [[ -z "$MQTT_BROKER" ]] || [[ -z "$MQTT_TOPIC" ]]; then
-        log_warn "MQTT not sent: missing MQTT_BROKER or MQTT_TOPIC"
-        return 0
-    fi
+  if [[ -z "$MQTT_BROKER" ]] || [[ -z "$MQTT_TOPIC" ]]; then
+    log_warn "MQTT not sent: missing MQTT_BROKER or MQTT_TOPIC"
+    return 0
+  fi
 
-    if ! command -v mosquitto_pub &>/dev/null; then
-        log_warn "MQTT not sent: mosquitto_pub not found"
-        return 0
-    fi
+  if ! command -v mosquitto_pub &>/dev/null; then
+    log_warn "MQTT not sent: mosquitto_pub not found"
+    return 0
+  fi
 
-    local mqtt_args=(-h "$MQTT_BROKER" -t "$MQTT_TOPIC" -m "$payload" -q 0 -r)
+  local mqtt_args=(-h "$MQTT_BROKER" -t "$MQTT_TOPIC" -m "$payload" -q 0 -r)
 
-    if [[ -n "$MQTT_USER" ]]; then
-        mqtt_args+=(-u "$MQTT_USER")
-    fi
-    if [[ -n "$MQTT_PASSWORD" ]]; then
-        mqtt_args+=(-P "$MQTT_PASSWORD")
-    fi
+  if [[ -n "$MQTT_USER" ]]; then
+    mqtt_args+=(-u "$MQTT_USER")
+  fi
+  if [[ -n "$MQTT_PASSWORD" ]]; then
+    mqtt_args+=(-P "$MQTT_PASSWORD")
+  fi
 
-    if mosquitto_pub "${mqtt_args[@]}" >/dev/null 2>&1; then
-        log_info "MQTT message sent to $MQTT_TOPIC"
-    else
-        log_warn "Failed to send MQTT message to $MQTT_TOPIC"
-    fi
+  if mosquitto_pub "${mqtt_args[@]}" >/dev/null 2>&1; then
+    log_info "MQTT message sent to $MQTT_TOPIC"
+  else
+    log_warn "Failed to send MQTT message to $MQTT_TOPIC"
+  fi
 }
 
 send_mqtt_stats() {
-    if [[ ! -f "$STATS_FILE" ]]; then
-        log_warn "MQTT stats not sent: stats file not found"
-        return 0
-    fi
+  if [[ ! -f "$STATS_FILE" ]]; then
+    log_warn "MQTT stats not sent: stats file not found"
+    return 0
+  fi
 
-    local stats
-    stats=$(cat "$STATS_FILE")
+  local stats
+  stats=$(cat "$STATS_FILE")
 
-    local payload
-    payload=$(jq -n \
-        --arg timestamp "$(date '+%Y-%m-%dT%H:%M:%S')" \
-        --argjson videos_processed "$(echo "$stats" | jq -r '.videos_processed')" \
-        --argjson total_requests "$(echo "$stats" | jq -r '.total_requests')" \
-        --argjson total_prompt_tokens "$(echo "$stats" | jq -r '.total_prompt_tokens')" \
-        --argjson total_completion_tokens "$(echo "$stats" | jq -r '.total_completion_tokens')" \
-        --argjson total_input_words "$(echo "$stats" | jq -r '.total_input_words')" \
-        --argjson total_output_words "$(echo "$stats" | jq -r '.total_output_words')" \
-        --argjson total_duration_ms "$(echo "$stats" | jq -r '.total_duration_ms')" \
-        --argjson total_ytdlp_ms "$(echo "$stats" | jq -r '.total_ytdlp_ms // 0')" \
-        --argjson total_whisper_ms "$(echo "$stats" | jq -r '.total_whisper_ms // 0')" \
-        --argjson total_tts_ms "$(echo "$stats" | jq -r '.total_tts_ms // 0')" \
-        --argjson total_processing_ms "$(echo "$stats" | jq -r '.total_processing_ms // 0')" \
-        '{
-            timestamp: $timestamp,
-            videos_processed: $videos_processed,
-            total_requests: $total_requests,
-            total_prompt_tokens: $total_prompt_tokens,
-            total_completion_tokens: $total_completion_tokens,
-            total_input_words: $total_input_words,
-            total_output_words: $total_output_words,
-            total_duration_ms: $total_duration_ms,
-            total_ytdlp_ms: $total_ytdlp_ms,
-            total_whisper_ms: $total_whisper_ms,
-            total_tts_ms: $total_tts_ms,
-            total_processing_ms: $total_processing_ms
-        }')
+  local payload
+  payload=$(jq -n \
+    --arg timestamp "$(date '+%Y-%m-%dT%H:%M:%S')" \
+    --argjson videos_processed "$(echo "$stats" | jq -r '.videos_processed')" \
+    --argjson total_requests "$(echo "$stats" | jq -r '.total_requests')" \
+    --argjson total_prompt_tokens "$(echo "$stats" | jq -r '.total_prompt_tokens')" \
+    --argjson total_completion_tokens "$(echo "$stats" | jq -r '.total_completion_tokens')" \
+    --argjson total_input_words "$(echo "$stats" | jq -r '.total_input_words')" \
+    --argjson total_output_words "$(echo "$stats" | jq -r '.total_output_words')" \
+    --argjson total_duration_ms "$(echo "$stats" | jq -r '.total_duration_ms')" \
+    --argjson total_ytdlp_ms "$(echo "$stats" | jq -r '.total_ytdlp_ms // 0')" \
+    --argjson total_whisper_ms "$(echo "$stats" | jq -r '.total_whisper_ms // 0')" \
+    --argjson total_tts_ms "$(echo "$stats" | jq -r '.total_tts_ms // 0')" \
+    --argjson total_processing_ms "$(echo "$stats" | jq -r '.total_processing_ms // 0')" \
+    '{
+      timestamp: $timestamp,
+      videos_processed: $videos_processed,
+      total_requests: $total_requests,
+      total_prompt_tokens: $total_prompt_tokens,
+      total_completion_tokens: $total_completion_tokens,
+      total_input_words: $total_input_words,
+      total_output_words: $total_output_words,
+      total_duration_ms: $total_duration_ms,
+      total_ytdlp_ms: $total_ytdlp_ms,
+      total_whisper_ms: $total_whisper_ms,
+      total_tts_ms: $total_tts_ms,
+      total_processing_ms: $total_processing_ms
+      }')
 
-    log_info "MQTT stats payload: $(printf '%s' "$payload" | jq -c .)"
+  log_info "MQTT stats payload: $(printf '%s' "$payload" | jq -c .)"
 
-    send_mqtt "$payload"
+  send_mqtt "$payload"
 }
 
 
 # Check if video ID exists in the external tracking file
 video_id_exists_in_external_file() {
-    local video_id="$1"
-    local external_file="${EXTERNAL_TRACKING_FILE}"
-    
-    # Create directory if it doesn't exist
-    mkdir -p "$(dirname "$external_file")"
-    touch "$external_file"
-    
-    # Use exact match: video_id must be at end of line, preceded by "youtube "
-    # or at start of line for exact match
-    if grep -qE "^youtube ${video_id}$" "$external_file" 2>/dev/null; then
-        return 0  # Found
+  local video_id="$1"
+  local external_file="${EXTERNAL_TRACKING_FILE}"
+
+  # Create directory if it doesn't exist
+  mkdir -p "$(dirname "$external_file")"
+  touch "$external_file"
+
+  # Use exact match: video_id must be at end of line, preceded by "youtube "
+  # or at start of line for exact match
+  if grep -qE "^youtube ${video_id}$" "$external_file" 2>/dev/null; then
+    return 0  # Found
     fi
-    # Also check if video_id alone appears at end of any line (legacy format)
-    if grep -qE "${video_id}$" "$external_file" 2>/dev/null; then
-        return 0  # Found (legacy format)
-    fi
-    
-    return 1  # Not found
+  # Also check if video_id alone appears at end of any line (legacy format)
+  if grep -qE "${video_id}$" "$external_file" 2>/dev/null; then
+    return 0  # Found (legacy format)
+  fi
+
+  return 1  # Not found
 }
 
 # Add video ID to external tracking file
 add_video_id_to_external_file() {
-    local video_id="$1"
-    local external_file="${EXTERNAL_TRACKING_FILE}"
-    
-    # Create directory if it doesn't exist
-    mkdir -p "$(dirname "$external_file")"
-    
-    # Check if video ID already exists (avoid duplicates)
-    if ! video_id_exists_in_external_file "$video_id"; then
-        # Append video ID to file (one per line) with youtube prefix
-        echo "youtube $video_id" >> "$external_file"
-    fi
+  local video_id="$1"
+  local external_file="${EXTERNAL_TRACKING_FILE}"
+
+  # Create directory if it doesn't exist
+  mkdir -p "$(dirname "$external_file")"
+
+  # Check if video ID already exists (avoid duplicates)
+  if ! video_id_exists_in_external_file "$video_id"; then
+    # Append video ID to file (one per line) with youtube prefix
+    echo "youtube $video_id" >> "$external_file"
+  fi
 }
 
 cleanup_temp() {
-    if [[ "$CLEANUP" == "true" ]]; then
-        if [[ "$VERBOSE" == "true" ]] || [[ "$TRANSCRIPT_VERBOSE" == "true" ]]; then
-            log_info "Cleaning up temporary files..."
-        fi
-        rm -rf "$TMP_BASE"
-        rm -rf "${TRANSCRIPT_TMP:-}"
-        rm -rf "${METADATA_TMP:-}"
-        rm -rf "${STATS_FILE:-}"
-        if [[ "$VERBOSE" == "true" ]] || [[ "$TRANSCRIPT_VERBOSE" == "true" ]]; then
-            log_info "Temporary files cleaned."
-        fi
+  if [[ "$CLEANUP" == "true" ]]; then
+    if [[ "$VERBOSE" == "true" ]] || [[ "$TRANSCRIPT_VERBOSE" == "true" ]]; then
+      log_info "Cleaning up temporary files..."
     fi
+    rm -rf "${TRANSCRIPT_TMP:-}"
+    rm -rf "${METADATA_TMP:-}"
+    rm -rf "${STATS_FILE:-}"
+    # Only remove TMP_BASE itself when the script created it; a TMP_BASE
+    # provided via .env/environment belongs to the user.
+    if [[ "$TMP_BASE_OWNED" == "true" ]]; then
+      rm -rf "$TMP_BASE"
+    fi
+    if [[ "$VERBOSE" == "true" ]] || [[ "$TRANSCRIPT_VERBOSE" == "true" ]]; then
+      log_info "Temporary files cleaned."
+    fi
+  fi
 }
 
 validate_backend_options() {
-    local backend="$1"
+  local backend="$1"
 
-    if [[ "$backend" != "ollama" && "$CLI_OPT_OLLAMA" == "true" ]]; then
-        log_warn "Ollama-specific options (--model/--host/--num-ctx) ignored: backend is '${backend}'"
-    fi
-    if [[ "$backend" != "litellm" && "$CLI_OPT_LITELLM" == "true" ]]; then
-        log_warn "LiteLLM-specific options (--litellm-proxy/--litellm-model/--litellm-key) ignored: backend is '${backend}'"
-    fi
-    if [[ "$backend" != "omniroute" && "$CLI_OPT_OMNIROUTE" == "true" ]]; then
-        log_warn "Omniroute-specific options (--omniroute/--omniroute-model/--omniroute-key) ignored: backend is '${backend}'"
-    fi
+  if [[ "$backend" != "ollama" && "$CLI_OPT_OLLAMA" == "true" ]]; then
+    log_warn "Ollama-specific options (--model/--host/--num-ctx) ignored: backend is '${backend}'"
+  fi
+  if [[ "$backend" != "litellm" && "$CLI_OPT_LITELLM" == "true" ]]; then
+    log_warn "LiteLLM-specific options (--litellm-proxy/--litellm-model/--litellm-key) ignored: backend is '${backend}'"
+  fi
+  if [[ "$backend" != "omniroute" && "$CLI_OPT_OMNIROUTE" == "true" ]]; then
+    log_warn "Omniroute-specific options (--omniroute/--omniroute-model/--omniroute-key) ignored: backend is '${backend}'"
+  fi
 }
 
 main() {
-    parse_args "$@"
-    
-    # Normalize TARGET_LANGUAGE to TRANSCRIPT_LANG
-    case "$TARGET_LANGUAGE" in
-        en) TRANSCRIPT_LANG="en" ;;
-        it) TRANSCRIPT_LANG="it" ;;
-        es) TRANSCRIPT_LANG="es" ;;
-        fr) TRANSCRIPT_LANG="fr" ;;
-        de) TRANSCRIPT_LANG="de" ;;
-        pt) TRANSCRIPT_LANG="pt" ;;
-        ja) TRANSCRIPT_LANG="ja" ;;
-        ko) TRANSCRIPT_LANG="ko" ;;
-        zh) TRANSCRIPT_LANG="zh-Hans" ;;
-        zh-Hans) TRANSCRIPT_LANG="zh-Hans" ;;
-        zh-Hant) TRANSCRIPT_LANG="zh-Hant" ;;
-        ru) TRANSCRIPT_LANG="ru" ;;
-        *) TRANSCRIPT_LANG="$TARGET_LANGUAGE" ;;
-    esac
-    
-    if [[ -n "${OLLAMA_HOST:-}" ]]; then
-        export OLLAMA_HOST
-    fi
-    export OLLAMA_MODEL OLLAMA_NUM_CTX MAX_TOKENS TEMPERATURE MAX_RETRIES
-    export LLM_BACKEND
-    export USE_LITELLM LITELLM_PROXY_URL LITELLM_MODEL LITELLM_API_KEY
-    export USE_OMNIROUTE OMNIROUTE_URL OMNIROUTE_MODEL OMNIROUTE_API_KEY
-    export TRANSCRIPT_VERBOSE
-    
-    source "${LIB_DIR}/ollama.sh"
-    source "${LIB_DIR}/omniroute.sh"
-    init_stats
-    
-    
-    # Backward compatibility: if legacy USE_* flags are set via env but --backend
-    # was not passed, derive LLM_BACKEND from them. --backend takes precedence
-    # because parse_args sets LLM_BACKEND directly only when --backend is given.
-    if [[ -z "${LLM_BACKEND_FROM_CLI:-}" ]]; then
-        if [[ "$USE_OMNIROUTE" == "true" ]]; then
-            LLM_BACKEND="omniroute"
-        elif [[ "$USE_LITELLM" == "true" ]]; then
-            LLM_BACKEND="litellm"
-        fi
-    fi
+  parse_args "$@"
 
-    # Resolve unified LLM parameters to backend-specific variables if set
-    if [[ -n "$LLM_URL" ]]; then
-        case "$LLM_BACKEND" in
-            litellm)   LITELLM_PROXY_URL="$LLM_URL" ;;
-            omniroute) OMNIROUTE_URL="$LLM_URL" ;;
-            ollama)    OLLAMA_HOST="$LLM_URL" ;;
-        esac
-    fi
-    if [[ -n "$LLM_API_KEY" ]]; then
-        case "$LLM_BACKEND" in
-            litellm)   LITELLM_API_KEY="$LLM_API_KEY" ;;
-            omniroute) OMNIROUTE_API_KEY="$LLM_API_KEY" ;;
-        esac
-    fi
+  # Normalize TARGET_LANGUAGE to TRANSCRIPT_LANG
+  case "$TARGET_LANGUAGE" in
+    en) TRANSCRIPT_LANG="en" ;;
+    it) TRANSCRIPT_LANG="it" ;;
+    es) TRANSCRIPT_LANG="es" ;;
+    fr) TRANSCRIPT_LANG="fr" ;;
+    de) TRANSCRIPT_LANG="de" ;;
+    pt) TRANSCRIPT_LANG="pt" ;;
+    ja) TRANSCRIPT_LANG="ja" ;;
+    ko) TRANSCRIPT_LANG="ko" ;;
+    zh) TRANSCRIPT_LANG="zh-Hans" ;;
+    zh-Hans) TRANSCRIPT_LANG="zh-Hans" ;;
+    zh-Hant) TRANSCRIPT_LANG="zh-Hant" ;;
+    ru) TRANSCRIPT_LANG="ru" ;;
+    *) TRANSCRIPT_LANG="$TARGET_LANGUAGE" ;;
+  esac
 
-    validate_backend_options "$LLM_BACKEND"
+  if [[ -n "${OLLAMA_HOST:-}" ]]; then
+    export OLLAMA_HOST
+  fi
+  export OLLAMA_MODEL OLLAMA_NUM_CTX MAX_TOKENS TEMPERATURE MAX_RETRIES
+  export LLM_BACKEND
+  export USE_LITELLM LITELLM_PROXY_URL LITELLM_MODEL LITELLM_API_KEY
+  export USE_OMNIROUTE OMNIROUTE_URL OMNIROUTE_MODEL OMNIROUTE_API_KEY
+  export TRANSCRIPT_VERBOSE
 
-    # Resolve effective model for the selected backend
+  source "${LIB_DIR}/ollama.sh"
+  source "${LIB_DIR}/omniroute.sh"
+  init_stats
+
+  # Backward compatibility: if legacy USE_* flags are set via env but --backend
+  # was not passed, derive LLM_BACKEND from them. --backend takes precedence
+  # because parse_args sets LLM_BACKEND directly only when --backend is given.
+  if [[ -z "${LLM_BACKEND_FROM_CLI:-}" ]]; then
+    if [[ "$USE_OMNIROUTE" == "true" ]]; then
+      LLM_BACKEND="omniroute"
+    elif [[ "$USE_LITELLM" == "true" ]]; then
+      LLM_BACKEND="litellm"
+    fi
+  fi
+
+  # Resolve unified LLM parameters to backend-specific variables if set
+  if [[ -n "$LLM_URL" ]]; then
     case "$LLM_BACKEND" in
-        litellm)    LLM_MODEL="${LITELLM_MODEL:-${LLM_MODEL:-$OLLAMA_MODEL}}" ;;
-        omniroute)  LLM_MODEL="${OMNIROUTE_MODEL:-${LLM_MODEL:-$OLLAMA_MODEL}}" ;;
-        *)          LLM_MODEL="${LLM_MODEL:-$OLLAMA_MODEL}" ;;
+      litellm)   LITELLM_PROXY_URL="$LLM_URL" ;;
+      omniroute) OMNIROUTE_URL="$LLM_URL" ;;
+      ollama)    OLLAMA_HOST="$LLM_URL" ;;
     esac
-    export LLM_MODEL
-    
-    # Override ollama_chat to delegate to the selected backend
-    if [[ "$LLM_BACKEND" == "omniroute" ]]; then
-        log_info "Using Omniroute backend: $OMNIROUTE_URL with model: $LLM_MODEL"
-        
-        ollama_chat() {
-            omniroute_chat "$@"
-        }
-    elif [[ "$LLM_BACKEND" == "litellm" ]]; then
-        log_info "Using LiteLLM backend: $LITELLM_PROXY_URL with model: $LLM_MODEL"
-    else
-        # Ollama mode - perform Ollama checks
-        ollama_check
-        
-        if ! ollama_model_exists "$OLLAMA_MODEL"; then
-            log_error "Model '$OLLAMA_MODEL' not found in Ollama"
-            log_error "Available models:"
-            curl -s "$OLLAMA_HOST/api/tags" | jq -r '.models[].name' 2>/dev/null || echo "  (failed to fetch list)"
-            exit 1
-        fi
-        
-        log_info "Using Ollama model: $OLLAMA_MODEL at $OLLAMA_HOST"
-    fi
-    
-    summarize_video "$TARGET"
-    
-    if [[ "$SHOW_STATS" == "true" ]]; then
-        show_stats
+  fi
+  if [[ -n "$LLM_API_KEY" ]]; then
+    case "$LLM_BACKEND" in
+      litellm)   LITELLM_API_KEY="$LLM_API_KEY" ;;
+      omniroute) OMNIROUTE_API_KEY="$LLM_API_KEY" ;;
+    esac
+  fi
+
+  validate_backend_options "$LLM_BACKEND"
+
+  # Resolve effective model for the selected backend
+  case "$LLM_BACKEND" in
+    litellm)    LLM_MODEL="${LITELLM_MODEL:-${LLM_MODEL:-$OLLAMA_MODEL}}" ;;
+    omniroute)  LLM_MODEL="${OMNIROUTE_MODEL:-${LLM_MODEL:-$OLLAMA_MODEL}}" ;;
+    *)          LLM_MODEL="${LLM_MODEL:-$OLLAMA_MODEL}" ;;
+  esac
+  export LLM_MODEL
+
+  # Override ollama_chat to delegate to the selected backend
+  if [[ "$LLM_BACKEND" == "omniroute" ]]; then
+    log_info "Using Omniroute backend: $OMNIROUTE_URL with model: $LLM_MODEL"
+
+    ollama_chat() {
+      omniroute_chat "$@"
+    }
+  elif [[ "$LLM_BACKEND" == "litellm" ]]; then
+    log_info "Using LiteLLM backend: $LITELLM_PROXY_URL with model: $LLM_MODEL"
+  else
+    # Ollama mode - perform Ollama checks
+    ollama_check
+
+    if ! ollama_model_exists "$OLLAMA_MODEL"; then
+      log_error "Model '$OLLAMA_MODEL' not found in Ollama"
+      log_error "Available models:"
+      curl -s "$OLLAMA_HOST/api/tags" | jq -r '.models[].name' 2>/dev/null || echo "  (failed to fetch list)"
+      exit 1
     fi
 
-    send_mqtt_stats
+    log_info "Using Ollama model: $OLLAMA_MODEL at $OLLAMA_HOST"
+  fi
+
+  summarize_video "$TARGET"
+
+  if [[ "$SHOW_STATS" == "true" ]]; then
+    show_stats
+  fi
+
+  send_mqtt_stats
 }
+
 main "$@"

@@ -1,201 +1,40 @@
 #!/bin/bash
 # lib/tts.sh - Text-to-Speech using Piper or edge-tts
 
-# Map language codes to BCP-47 tags for SSML
-lang_to_bcp47() {
-    local lang="$1"
-    case "$lang" in
-        en) echo "en-US" ;;
-        it) echo "it-IT" ;;
-        es) echo "es-ES" ;;
-        fr) echo "fr-FR" ;;
-        de) echo "de-DE" ;;
-        pt) echo "pt-BR" ;;
-        ja) echo "ja-JP" ;;
-        ko) echo "ko-KR" ;;
-        zh) echo "zh-CN" ;;
-        ru) echo "ru-RU" ;;
-        ar) echo "ar-EG" ;;
-        hi) echo "hi-IN" ;;
-        ro) echo "ro-RO" ;;
-        *) echo "en-US" ;;
-    esac
-}
+: "${PIPER_BIN:=piper}"
+: "${EDGE_TTS_BIN:=edge-tts}"
 
-# Get default edge-tts voice for a language
-is_english_text() {
-    local text="$1"
-    local lower_text
-    lower_text=$(echo "$text" | tr '[:upper:]' '[:lower:]')
+# Why the last generate_audio_edge_tts call failed. Empty on success.
+#   "fallback" - edge-tts could not deliver the audio (binary missing, network
+#                or service error, rate limit, crash). Worth retrying locally
+#                with piper.
+#   "fatal"    - the request or the local tooling is at fault (bad voice name,
+#                bad output format, ffmpeg failure). Retrying under piper would
+#                fail the same way and hide the real cause.
+EDGE_TTS_FAILURE=""
 
-    # Common English words that are unlikely to appear in Romance languages
-    local english_indicators=" the is are was were have has had will would can could should might may be been being do does did this that these those it its he she they we you i my your his her our their what which who whom how when where why not no yes but and or if then than so too very also just only even still already yet"
+# Resolve a TTS binary name or path to an absolute executable path.
+# Accepts a path to an existing file, otherwise looks the name up on PATH.
+resolve_tts_bin() {
+    local bin="$1"
+    local label="$2"
 
-    local match_count=0
-    local word_count=0
-
-    # Count words and English indicator matches
-    for word in $lower_text; do
-        word_count=$((word_count + 1))
-        if [[ "$english_indicators" == *" $word "* ]] || [[ "$english_indicators" == *" $word"* ]]; then
-            match_count=$((match_count + 1))
-        fi
-    done
-
-    # If more than 15% of words are English indicators, likely English
-    if [[ $word_count -gt 0 ]]; then
-        local ratio=$((match_count * 100 / word_count))
-        if [[ $ratio -ge 15 ]]; then
-            return 0  # Is English
-        fi
-    fi
-    return 1  # Not English
-}
-
-# Detect language of a text segment based on Unicode character ranges and word patterns
-detect_segment_language() {
-    local text="$1"
-    local target_lang="${2:-en}"
-    local total_chars=0
-    local latin_chars=0
-    local cyrillic_chars=0
-    local cjk_chars=0
-    local arabic_chars=0
-    local devanagari_chars=0
-
-    # Count characters by script (simplified heuristic)
-    local i char ord
-    for (( i=0; i<${#text}; i++ )); do
-        char="${text:$i:1}"
-        ord=$(printf '%d' "'$char" 2>/dev/null || echo 0)
-
-        # Skip spaces and punctuation (don't count as any script)
-        if [[ $ord -lt 48 ]] || [[ $ord -gt 126 && $ord -lt 192 ]]; then
-            continue
-        fi
-
-        total_chars=$((total_chars + 1))
-
-        # Latin: 0x0041-0x005A, 0x0061-0x007A, 0x00C0-0x024F
-        if [[ $ord -ge 65 && $ord -le 90 ]] || [[ $ord -ge 97 && $ord -le 122 ]] || \
-           [[ $ord -ge 192 && $ord -le 591 ]]; then
-            latin_chars=$((latin_chars + 1))
-        # Cyrillic: 0x0400-0x04FF
-        elif [[ $ord -ge 1024 && $ord -le 1279 ]]; then
-            cyrillic_chars=$((cyrillic_chars + 1))
-        # CJK Unified: 0x4E00-0x9FFF, 0x3040-0x309F (Hiragana), 0x30A0-0x30FF (Katakana)
-        elif [[ $ord -ge 19968 && $ord -le 40959 ]] || \
-             [[ $ord -ge 12352 && $ord -le 12447 ]] || \
-             [[ $ord -ge 12448 && $ord -le 12543 ]]; then
-            cjk_chars=$((cjk_chars + 1))
-        # Arabic: 0x0600-0x06FF
-        elif [[ $ord -ge 1536 && $ord -le 1791 ]]; then
-            arabic_chars=$((arabic_chars + 1))
-        # Devanagari (Hindi): 0x0900-0x097F
-        elif [[ $ord -ge 2304 && $ord -le 2431 ]]; then
-            devanagari_chars=$((devanagari_chars + 1))
-        fi
-    done
-
-    if [[ $total_chars -eq 0 ]]; then
-        echo "unknown"
-        return
-    fi
-
-    # Require at least 20% of characters to be in a non-Latin script to trigger language switch
-    local threshold=$((total_chars / 5))
-
-    if [[ $cjk_chars -gt $threshold && $cjk_chars -gt $latin_chars ]]; then
-        echo "cjk"
-    elif [[ $cyrillic_chars -gt $threshold && $cyrillic_chars -gt $latin_chars ]]; then
-        echo "ru"
-    elif [[ $arabic_chars -gt $threshold ]]; then
-        echo "ar"
-    elif [[ $devanagari_chars -gt $threshold ]]; then
-        echo "hi"
-    elif [[ $latin_chars -gt 0 ]]; then
-        # For Latin script, check if it's English or the target language
-        # Only flag as English if target is NOT English and text appears to be English
-        if [[ "$target_lang" != "en" ]] && is_english_text "$text"; then
-            echo "en"
-        else
-            echo "latin"
+    if [[ "$bin" == */* ]]; then
+        if [[ -x "$bin" ]]; then
+            echo "$bin"
+            return 0
         fi
     else
-        echo "latin"
+        local resolved
+        if resolved=$(command -v "$bin" 2>/dev/null) && [[ -n "$resolved" ]]; then
+            echo "$resolved"
+            return 0
+        fi
     fi
-}
 
-# Convert plain text to SSML with language-aware voice switching
-text_to_ssml() {
-    local text="$1"
-    local target_lang="$2"
-    local target_voice="$3"
-
-    local bcp47_target
-    bcp47_target=$(lang_to_bcp47 "$target_lang")
-
-    # Split text into sentences (rough split on sentence boundaries)
-    local sentences
-    sentences=$(echo "$text" | sed 's/\([.!?]\)\s*/\1\n/g')
-
-    local ssml="<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xml:lang=\"${bcp47_target}\">"
-    local has_foreign=false
-
-    while IFS= read -r sentence || [[ -n "$sentence" ]]; do
-        [[ -z "$sentence" ]] && continue
-
-        local seg_lang
-        seg_lang=$(detect_segment_language "$sentence" "$target_lang")
-
-        case "$seg_lang" in
-            latin)
-                # Use target language voice
-                ssml+="<voice name=\"${target_voice}\">${sentence}</voice>"
-                ;;
-            en)
-                # English detected in non-English text - use English voice
-                ssml+="<lang xml:lang=\"en-US\"><voice name=\"en-US-EmmaMultilingualNeural\">${sentence}</voice></lang>"
-                has_foreign=true
-                ;;
-            ru)
-                ssml+="<lang xml:lang=\"ru-RU\"><voice name=\"ru-RU-SvetlanaNeural\">${sentence}</voice></lang>"
-                has_foreign=true
-                ;;
-            cjk)
-                # Detect specific CJK language (simplified: default to Chinese for now)
-                if [[ "$target_lang" == "ja" ]]; then
-                    ssml+="<lang xml:lang=\"ja-JP\"><voice name=\"ja-JP-NanamiNeural\">${sentence}</voice></lang>"
-                elif [[ "$target_lang" == "ko" ]]; then
-                    ssml+="<lang xml:lang=\"ko-KR\"><voice name=\"ko-KR-SunHiNeural\">${sentence}</voice></lang>"
-                else
-                    ssml+="<lang xml:lang=\"zh-CN\"><voice name=\"zh-CN-XiaoxiaoNeural\">${sentence}</voice></lang>"
-                fi
-                has_foreign=true
-                ;;
-            ar)
-                ssml+="<lang xml:lang=\"ar-EG\"><voice name=\"ar-EG-SalmaNeural\">${sentence}</voice></lang>"
-                has_foreign=true
-                ;;
-            hi)
-                ssml+="<lang xml:lang=\"hi-IN\"><voice name=\"hi-IN-SwaraNeural\">${sentence}</voice></lang>"
-                has_foreign=true
-                ;;
-            *)
-                ssml+="<voice name=\"${target_voice}\">${sentence}</voice>"
-                ;;
-        esac
-    done <<< "$sentences"
-
-    ssml+="</speak>"
-
-    # Return the SSML and whether foreign segments were found
-    if [[ "$has_foreign" == "true" ]]; then
-        echo "$ssml"
-        return 0
-    else
-        return 1
-    fi
+    log_error "$label not found: $bin"
+    log_error "Install it or set the corresponding *_BIN variable to its full path"
+    return 1
 }
 
 get_voice_for_language() {
@@ -204,6 +43,12 @@ get_voice_for_language() {
     local voices_dir="${3:-${VOICES_DIR:-/data/configs/voices}}"
 
     if [[ -n "$voice_override" ]]; then
+        # Already a usable path to a voice file.
+        if [[ -f "$voice_override" ]]; then
+            echo "$voice_override"
+            return 0
+        fi
+        # Relative to VOICES_DIR, with or without the .onnx extension.
         local voice_path="${voices_dir}/${voice_override}.onnx"
         if [[ -f "$voice_path" ]]; then
             echo "$voice_path"
@@ -216,7 +61,8 @@ get_voice_for_language() {
         fi
         log_error "Voice not found: $voice_override"
         log_error "Available voices in ${voices_dir}:"
-        ls "$voices_dir"/*.onnx 2>/dev/null | xargs -n1 basename | sed 's/.onnx$//' | while read -r v; do
+        find "$voices_dir" -maxdepth 1 -name '*.onnx' -type f -print0 2>/dev/null \
+            | xargs -0 -r -n1 basename | sed 's/\.onnx$//' | while read -r v; do
             echo "  - $v"
         done
         return 1
@@ -224,10 +70,10 @@ get_voice_for_language() {
 
     case "$language" in
         ro)
-            echo "${voices_dir}/${DEFAULT_VOICE_PIPER_RO:-ro_RO-mihai-medium}.onnx"
+            echo "${voices_dir}/${DEFAULT_VOICE_PIPER_RO:-ro_RO-sanda-high}.onnx"
             ;;
         *)
-            echo "${voices_dir}/${DEFAULT_VOICE_PIPER_EN:-en_GB-alan-medium}.onnx"
+            echo "${voices_dir}/${DEFAULT_VOICE_PIPER_EN:-en_US-ryan-high}.onnx"
             ;;
     esac
 }
@@ -252,25 +98,7 @@ check_voice_exists() {
 get_edge_tts_voice() {
     local language="${1:-en}"
     local voice_override="${2:-}"
-    
-    # Map language codes to edge-tts voice prefixes
-    case "$language" in
-        en) lang_prefix="en" ;;
-        es) lang_prefix="es" ;;
-        fr) lang_prefix="fr" ;;
-        de) lang_prefix="de" ;;
-        it) lang_prefix="it" ;;
-        pt) lang_prefix="pt" ;;
-        ja) lang_prefix="ja" ;;
-        ko) lang_prefix="ko" ;;
-        zh) lang_prefix="zh" ;;
-        ru) lang_prefix="ru" ;;
-        ar) lang_prefix="ar" ;;
-        hi) lang_prefix="hi" ;;
-        ro) lang_prefix="ro" ;;
-        *) lang_prefix="en" ;; # Default to English
-    esac
-    
+
     if [[ -n "$voice_override" ]]; then
         echo "$voice_override"
         return 0
@@ -300,7 +128,6 @@ generate_audio_piper() {
     local voice_path="$2"
     local output_file="$3"
     local format="${4:-m4a}"
-    local ssml_input="${5:-false}"
 
     if ! check_voice_exists "$voice_path"; then
         return 1
@@ -321,20 +148,15 @@ generate_audio_piper() {
     local input_file="${temp_dir}/input.txt"
     local wav_file="${temp_dir}/output.wav"
 
-    # Piper doesn't support SSML natively, so strip tags if SSML input
-    local clean_text="$text"
-    if [[ "$ssml_input" == "true" ]]; then
-        # Strip SSML tags, keeping only text content
-        clean_text=$(echo "$text" | sed 's/<[^>]*>//g' | sed 's/  */ /g' | sed 's/^ //;s/ $//')
-        log_debug "Stripped SSML tags for Piper input"
-    fi
-
     log_debug "Writing text to: $input_file"
-    echo "$clean_text" > "$input_file"
+    echo "$text" > "$input_file"
 
     log_info "Generating audio with Piper..."
 
-    if ! /home/marp/.local/bin/piper -m "$voice_path" -c "$config_path" -i "$input_file" -f "$wav_file" 2>&1; then
+    local piper_bin
+    piper_bin=$(resolve_tts_bin "$PIPER_BIN" "Piper") || { rm -rf "$temp_dir"; return 1; }
+
+    if ! "$piper_bin" -m "$voice_path" -c "$config_path" -i "$input_file" -f "$wav_file" 2>&1; then
         log_error "Piper failed to generate audio"
         rm -rf "$temp_dir"
         return 1
@@ -365,16 +187,25 @@ generate_audio_edge_tts() {
     local voice="$2"
     local output_file="$3"
     local format="${4:-m4a}"
-    local ssml_input="${5:-false}"
 
     case "$format" in
-        m4a) output_format="audio-16khz-128kbitrate-mono-mp3" ;;
-        mp3) output_format="audio-16khz-128kbitrate-mono-mp3" ;;
+        m4a|mp3) ;;
         *)
             log_error "Invalid audio format: $format (must be: m4a, mp3)"
+            EDGE_TTS_FAILURE="fatal"
             return 1
             ;;
     esac
+
+    # edge-tts rejects anything that is not an edge-tts voice name
+    # client-side. Checking it here keeps a typo from being silently degraded
+    # to a different engine - and a different voice - by the piper fallback.
+    if [[ ! "$voice" =~ ^[a-z]{2,}-[A-Z]{2,}-(.+Neural)$ ]]; then
+        log_error "Invalid edge-tts voice name: $voice"
+        log_error "Voice names look like 'ro-RO-AlinaNeural' (see: $EDGE_TTS_BIN --list-voices)"
+        EDGE_TTS_FAILURE="fatal"
+        return 1
+    fi
 
     # Create temporary file for text input
     local temp_dir="${TMP_BASE}/edge-tts_$$"
@@ -384,21 +215,26 @@ generate_audio_edge_tts() {
 
     log_info "Generating audio with edge-tts using voice: $voice"
 
-    # edge-tts does not support --ssml; strip tags if SSML input
     local edge_tts_text
-    if [[ "$ssml_input" == "true" ]]; then
-        edge_tts_text=$(sed 's/<[^>]*>//g; s/  */ /g; s/^ //; s/ $//' "$input_file")
-        log_debug "Stripped SSML tags for edge-tts input"
-    else
-        edge_tts_text=$(cat "$input_file")
-    fi
+    edge_tts_text=$(cat "$input_file")
 
     # Use edge-tts to generate audio
     local edge_tts_args=("--voice" "$voice" "--write-media" "$output_file" "--text" "$edge_tts_text")
 
-    if ! output=$(/home/marp/.local/bin/edge-tts "${edge_tts_args[@]}" 2>&1); then
+    local edge_tts_bin
+    if ! edge_tts_bin=$(resolve_tts_bin "$EDGE_TTS_BIN" "edge-tts"); then
+        rm -rf "$temp_dir"
+        EDGE_TTS_FAILURE="fallback"
+        return 1
+    fi
+
+    # A non-zero exit here means edge-tts could not deliver the audio: the
+    # service refused the connection, was unavailable, throttled the request,
+    # or the client crashed. All of these are worth retrying locally.
+    if ! output=$("$edge_tts_bin" "${edge_tts_args[@]}" 2>&1); then
         log_error "edge-tts failed to generate audio: $output"
         rm -rf "$temp_dir"
+        EDGE_TTS_FAILURE="fallback"
         return 1
     fi
 
@@ -410,6 +246,9 @@ generate_audio_edge_tts() {
         if ! ffmpeg -y -i "$temp_mp3" -vn -c:a aac -b:a "192k" "$output_file" 2>&1; then
             log_error "FFmpeg conversion from MP3 to M4A failed"
             rm -rf "$temp_dir"
+            # ffmpeg is local and is also what piper needs, so a retry would
+            # fail identically.
+            EDGE_TTS_FAILURE="fatal"
             return 1
         fi
     fi
@@ -417,6 +256,27 @@ generate_audio_edge_tts() {
     rm -rf "$temp_dir"
     log_info "Audio saved to: $output_file"
     return 0
+}
+
+# Generate audio with Piper, resolving the voice for the target language.
+# voice_setting may be empty, a name in voices_dir, or a path to a .onnx file.
+generate_audio_with_piper() {
+    local text="$1"
+    local voice_setting="$2"
+    local output_file="$3"
+    local format="$4"
+    local language="$5"
+    local voices_dir="$6"
+
+    local voice_path
+    # If voice_setting is already a full path, use it directly
+    if [[ "$voice_setting" == /* ]] && [[ -f "$voice_setting" ]]; then
+        voice_path="$voice_setting"
+    else
+        voice_path=$(get_voice_for_language "$language" "$voice_setting" "$voices_dir") || return 1
+    fi
+
+    generate_audio_piper "$text" "$voice_path" "$output_file" "$format"
 }
 
 generate_audio() {
@@ -434,37 +294,32 @@ generate_audio() {
                        | sed -E 's/^[[:space:]]*[-*+][[:space:]]+//' \
                        | sed -E '/^[[:space:]]*$/d')
 
-    # Try to generate SSML with multi-language voice switching
-    local ssml_output=""
-    local use_ssml=false
-
     case "$tts_engine" in
         piper)
-            local voice_path
-            # If voice_setting is already a full path, use it directly
-            if [[ "$voice_setting" == /* ]] && [[ -f "$voice_setting" ]]; then
-                voice_path="$voice_setting"
-            else
-                voice_path=$(get_voice_for_language "$language" "$voice_setting" "$voices_dir") || return 1
-            fi
-            # Piper doesn't support SSML voice switching, skip SSML generation
-            generate_audio_piper "$text" "$voice_path" "$output_file" "$format" "false"
+            generate_audio_with_piper "$text" "$voice_setting" "$output_file" "$format" "$language" "$voices_dir"
             ;;
         edge-tts)
             local voice
             voice=$(get_edge_tts_voice "$language" "$voice_setting") || return 1
 
-            # Try to generate SSML for multi-language support
-            if ssml_output=$(text_to_ssml "$text" "$language" "$voice"); then
-                use_ssml=true
-                log_info "Multi-language content detected, using SSML with voice switching"
+            if generate_audio_edge_tts "$text" "$voice" "$output_file" "$format"; then
+                return 0
             fi
 
-            if [[ "$use_ssml" == "true" ]]; then
-                generate_audio_edge_tts "$ssml_output" "$voice" "$output_file" "$format" "true"
-            else
-                generate_audio_edge_tts "$text" "$voice" "$output_file" "$format" "false"
+            # Retry locally only when edge-tts itself could not deliver the
+            # audio. A bad voice name or a local ffmpeg problem would fail the
+            # same way under piper, and falling back would bury the real cause
+            # behind a silently different voice.
+            if [[ "$EDGE_TTS_FAILURE" != "fallback" ]]; then
+                return 1
             fi
+
+            log_warn "edge-tts unavailable, falling back to piper"
+            rm -f "$output_file"  # discard any partial output from the failed attempt
+            # The requested --voice is an edge-tts voice name with no piper
+            # equivalent, so the fallback uses the default voice for the
+            # detected language instead.
+            generate_audio_with_piper "$text" "" "$output_file" "$format" "$language" "$voices_dir"
             ;;
         *)
             log_error "Invalid TTS engine: $tts_engine (must be: piper, edge-tts)"

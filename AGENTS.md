@@ -5,7 +5,11 @@
 ```bash
 ./yt-summary "https://youtube.com/watch?v=VIDEO_ID"
 ./yt-summary --help
+./yt-summary --help-all   # advanced/legacy options + every .env variable
 ```
+
+Invocation errors (no target, unknown option, option missing its value) print a
+short synopsis on stderr and exit 1 - not the full help.
 
 ## Key commands
 
@@ -24,7 +28,7 @@
 ## Architecture
 
 - **Entry point**: `./yt-summary` (1329 lines)
-- **Libraries**: `lib/ollama.sh`, `lib/cache.sh`, `lib/transcript.sh`, `lib/tts.sh`, `lib/omniroute.sh`, `lib/whisper.sh`
+- **Libraries**: `lib/ollama.sh`, `lib/cache.sh`, `lib/transcript.sh`, `lib/tts.sh`, `lib/omniroute.sh`, `lib/whisper.sh`, `lib/help.sh` (usage + `.env` reference)
 - **Pipeline**: fetch transcript → split into chunks → summarize each → merge → extract key points
 
 ## Dependencies
@@ -83,7 +87,7 @@ Unified flags (`-m`/`--model`, `--url`/`--proxy`, `--api-key`/`--key`) work acro
 | `--telegram` | Send per-video statistics via Telegram (one message after each video) |
 | `--audio` | Generate audio from summary |
 | `--voice VOICE` | Explicit voice name (overrides language detection) |
-| `--tts-engine ENGINE` | TTS engine: `piper` or `edge-tts` |
+| `--tts-engine ENGINE` | TTS engine: `piper` or `edge-tts`. If `edge-tts` cannot deliver the audio (binary missing, connection refused, service unavailable, throttling, crash), it automatically falls back to `piper` using the default voice for the detected language. A bad `--voice` or a local ffmpeg failure is reported instead of falling back. |
 | `--audio-format FORMAT` | Audio format: `m4a` or `mp3` |
 | `--stats` | Show session statistics at end (counts, tokens, and per-video processing durations: YT-dlp extraction → Whisper → LLM duration → TTS → Total) |
 | `--include-stats` | Include per-video statistics in output document (the final `--stats` block stays cumulative for the whole session) |
@@ -108,7 +112,8 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server |
 | `OLLAMA_MODEL` | `gemma2:2b` | Model name |
 | `OLLAMA_NUM_CTX` | `24000` | Ollama context window |
-| `LLM_BACKEND` | `ollama` | Backend: `ollama`, `litellm`, or `omniroute` |
+| `LLM_BACKEND` | `omniroute` | Backend: `ollama`, `litellm`, or `omniroute` |
+| `LLM_URL` / `LLM_MODEL` / `LLM_API_KEY` | *(empty)* | Unified overrides applied to the selected backend |
 | `CHUNK_WORDS` | `900` | Words per transcript chunk |
 | `AUTO_CHUNK` | `true` | Ask the LLM for the recommended chunk size before summarizing (`false` = always use `CHUNK_WORDS`; an explicit `--chunk-words` flag also disables it) |
 | `MAX_TOKENS` | `30000` | Max tokens per LLM response |
@@ -130,19 +135,22 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `OMNIROUTE_MODEL` | *(empty)* | Omniroute model name |
 | `OMNIROUTE_API_KEY` | *(empty)* | Omniroute API key |
 | `TTS_ENGINE` | `piper` | TTS engine: `piper` or `edge-tts` |
+| `PIPER_BIN` | `piper` | Piper binary: name resolved on `PATH`, or a full path |
+| `EDGE_TTS_BIN` | `edge-tts` | edge-tts binary: name resolved on `PATH`, or a full path |
 | `AUDIO_FORMAT` | `mp3` | Audio output format |
-| `AUDIO_VOICE` | *(empty)* | Explicit voice name |
+| `AUDIO_VOICE` | *(empty)* | Explicit voice name (or, for piper, a path to a `.onnx` file) |
 | `VOICES_DIR` | `/data/configs/voices` | Piper TTS voices directory |
-| `DEFAULT_VOICE_PIPER_EN` | `en_GB-alan-medium` | Default English voice for piper (filename, no `.onnx`) when `--voice` unset |
-| `DEFAULT_VOICE_PIPER_RO` | `ro_RO-mihai-medium` | Default Romanian voice for piper (filename, no `.onnx`) when `--voice` unset |
+| `DEFAULT_VOICE_PIPER_EN` | `en_US-ryan-high` | Default English voice for piper (filename, no `.onnx`) when `--voice` unset |
+| `DEFAULT_VOICE_PIPER_RO` | `ro_RO-sanda-high` | Default Romanian voice for piper (filename, no `.onnx`) when `--voice` unset |
 | `DEFAULT_VOICE_TTS_EN` | `en-US-EmmaMultilingualNeural` | Default English voice for edge-tts (voice name) when `--voice` unset |
 | `DEFAULT_VOICE_TTS_RO` | `ro-RO-AlinaNeural` | Default Romanian voice for edge-tts (voice name) when `--voice` unset |
 | `TELEGRAM_BOT_TOKEN` | *(empty)* | Telegram bot token |
 | `TELEGRAM_CHAT_ID` | *(empty)* | Telegram chat ID |
 | `TELEGRAM_API_URL` | `https://api.telegram.org` | Telegram API base URL |
-| `SEND_TELEGRAM` | `false` | Send Telegram notifications |
+| `SEND_TELEGRAM` | `true` | Send Telegram notifications |
+| `MQTT_BROKER` / `MQTT_TOPIC` / `MQTT_USER` / `MQTT_PASSWORD` | *(empty)* | Publish session statistics as JSON (requires `mosquitto-clients`) |
 | `EMAIL_FROM` | *(empty)* | Sender email address |
-| `TMP_BASE` | `/temp/yt-summary` | Temp file base dir |
+| `TMP_BASE` | *fresh `mktemp -d` per run* | Temp file base dir; a configured dir is reused and not deleted on exit |
 | `EXTERNAL_TRACKING_FILE` | `/data/ltr/yt-dlp/files` | Video ID tracking file |
 | `MAX_PLAYLIST_VIDEO_AGE_DAYS` | `0` | Max video age for playlists (0 = no limit) |
 | `MAX_PLAYLIST_VIDEOS` | `0` | Max videos per playlist (0 = no limit) |
@@ -158,6 +166,8 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `WHISPER_TRANSFER` | `rsync` | Audio transfer: `rsync` \| `scp` \| `shared` |
 | `WHISPER_SHARED_DIR` | *(empty)* | Shared folder path (transfer=shared) |
 | `WHISPER_REMOTE_DIR` | `/tmp/yt-summary-whisper` | Remote work dir on the whisper host |
+| `WHISPER_BIN` | `whisper-ctranslate2` | whisper binary name/path (local mode) |
+| `PROMPT_SYSTEM_CHUNKSIZE` / `PROMPT_USER_CHUNKSIZE` | *(defaults)* | Chunk-size recommendation prompts |
 
 > [!WARNING]
 > Never add real API keys/tokens to committed files. Keep them in the
