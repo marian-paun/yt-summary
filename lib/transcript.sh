@@ -113,14 +113,29 @@ get_playlist_videos() {
     return
   fi
 
+  # Build yt-dlp arguments with server-side filtering
+  local ytdlp_args=(--flat-playlist --print '%(url)s|%(epoch)s' --no-warnings)
+
+  # Use playlist-end for count limit (works because channel videos are newest-first)
+  if [[ "${MAX_PLAYLIST_VIDEOS:-0}" -gt 0 ]]; then
+    ytdlp_args+=(--playlist-end "${MAX_PLAYLIST_VIDEOS}")
+  fi
+
+  # Use dateafter for age limit (reduces fetched videos significantly)
+  if [[ "${MAX_PLAYLIST_VIDEO_AGE_DAYS:-0}" -gt 0 ]]; then
+    local cutoff_date
+    cutoff_date=$(date -d "-${MAX_PLAYLIST_VIDEO_AGE_DAYS} days" +%Y%m%d 2>/dev/null || date -v-"${MAX_PLAYLIST_VIDEO_AGE_DAYS}d" +%Y%m%d)
+    ytdlp_args+=(--dateafter "${cutoff_date}")
+  fi
+
   # Create temporary file for video metadata
   local temp_file
   temp_file=$(mktemp -p "${TMP_BASE}")
 
-  # Get video URLs with epoch timestamps
-  yt-dlp --flat-playlist --print '%(url)s|%(epoch)s' --no-warnings "$playlist_url" 2>/dev/null > "$temp_file"
+  # Get video URLs with epoch timestamps (with server-side filtering)
+  yt-dlp "${ytdlp_args[@]}" "$playlist_url" 2>/dev/null > "$temp_file"
 
-  # Process the results
+  # Process the results (apply any remaining local filters)
   local current_epoch
   current_epoch=$(date +%s)
   local count=0
@@ -128,7 +143,7 @@ get_playlist_videos() {
   while IFS='|' read -r url epoch; do
     [[ -z "$url" ]] && continue
 
-    # Check count limit if set
+    # Check count limit if set (in case dateafter returned more than needed)
     if [[ "${MAX_PLAYLIST_VIDEOS:-0}" -gt 0 && $count -ge $MAX_PLAYLIST_VIDEOS ]]; then
       break
     fi
@@ -145,17 +160,12 @@ get_playlist_videos() {
       continue
     fi
 
-    # Check age limit if set
+    # Check age limit if set (double-check for edge cases)
     if [[ "${MAX_PLAYLIST_VIDEO_AGE_DAYS:-0}" -gt 0 ]]; then
-      # Calculate seconds difference
       local seconds_diff
       seconds_diff=$(( (current_epoch - epoch) ))
-
-      # Convert to days
       local days_diff
       days_diff=$(( seconds_diff / 86400 ))
-
-      # Skip if older than max age
       if [[ $days_diff -gt $((MAX_PLAYLIST_VIDEO_AGE_DAYS)) ]]; then
         continue
       fi
