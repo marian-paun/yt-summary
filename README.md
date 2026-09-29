@@ -169,8 +169,16 @@ PROMPT_EOC
 ### TTS/Audio Options
 
 ```bash
-# TTS engine: piper (default) or edge-tts
+# TTS engine: piper (default) or edge-tts.
+# When edge-tts cannot deliver the audio (binary missing, connection refused,
+# service unavailable, throttling, crash) it automatically falls back to piper
+# using the default voice for the detected language. A bad --voice or a local
+# ffmpeg failure is reported instead of falling back.
 TTS_ENGINE=piper
+
+# TTS binaries: name resolved on PATH, or a full path to the executable.
+PIPER_BIN=piper
+EDGE_TTS_BIN=edge-tts
 
 # Audio format: mp3 (default) or m4a
 AUDIO_FORMAT=mp3
@@ -179,9 +187,11 @@ AUDIO_FORMAT=mp3
 AUDIO_VOICE=en-US
 
 # Default voices when no --voice/AUDIO_VOICE is set.
+# Set the piper defaults to voices that exist in VOICES_DIR:
+#   ls $VOICES_DIR/*.onnx
 # Piper defaults are filenames in VOICES_DIR (without .onnx).
-DEFAULT_VOICE_PIPER_EN=en_GB-alan-medium
-DEFAULT_VOICE_PIPER_RO=ro_RO-mihai-medium
+DEFAULT_VOICE_PIPER_EN=en_US-ryan-high
+DEFAULT_VOICE_PIPER_RO=ro_RO-sanda-high
 # edge-tts defaults are voice names (see: edge-tts --list-voices).
 DEFAULT_VOICE_TTS_EN=en-US-EmmaMultilingualNeural
 DEFAULT_VOICE_TTS_RO=ro-RO-AlinaNeural

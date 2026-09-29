@@ -83,7 +83,7 @@ Unified flags (`-m`/`--model`, `--url`/`--proxy`, `--api-key`/`--key`) work acro
 | `--telegram` | Send per-video statistics via Telegram (one message after each video) |
 | `--audio` | Generate audio from summary |
 | `--voice VOICE` | Explicit voice name (overrides language detection) |
-| `--tts-engine ENGINE` | TTS engine: `piper` or `edge-tts` |
+| `--tts-engine ENGINE` | TTS engine: `piper` or `edge-tts`. If `edge-tts` cannot deliver the audio (binary missing, connection refused, service unavailable, throttling, crash), it automatically falls back to `piper` using the default voice for the detected language. A bad `--voice` or a local ffmpeg failure is reported instead of falling back. |
 | `--audio-format FORMAT` | Audio format: `m4a` or `mp3` |
 | `--stats` | Show session statistics at end (counts, tokens, and per-video processing durations: YT-dlp extraction → Whisper → LLM duration → TTS → Total) |
 | `--include-stats` | Include per-video statistics in output document (the final `--stats` block stays cumulative for the whole session) |
@@ -130,11 +130,13 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `OMNIROUTE_MODEL` | *(empty)* | Omniroute model name |
 | `OMNIROUTE_API_KEY` | *(empty)* | Omniroute API key |
 | `TTS_ENGINE` | `piper` | TTS engine: `piper` or `edge-tts` |
+| `PIPER_BIN` | `piper` | Piper binary: name resolved on `PATH`, or a full path |
+| `EDGE_TTS_BIN` | `edge-tts` | edge-tts binary: name resolved on `PATH`, or a full path |
 | `AUDIO_FORMAT` | `mp3` | Audio output format |
-| `AUDIO_VOICE` | *(empty)* | Explicit voice name |
+| `AUDIO_VOICE` | *(empty)* | Explicit voice name (or, for piper, a path to a `.onnx` file) |
 | `VOICES_DIR` | `/data/configs/voices` | Piper TTS voices directory |
-| `DEFAULT_VOICE_PIPER_EN` | `en_GB-alan-medium` | Default English voice for piper (filename, no `.onnx`) when `--voice` unset |
-| `DEFAULT_VOICE_PIPER_RO` | `ro_RO-mihai-medium` | Default Romanian voice for piper (filename, no `.onnx`) when `--voice` unset |
+| `DEFAULT_VOICE_PIPER_EN` | `en_US-ryan-high` | Default English voice for piper (filename, no `.onnx`) when `--voice` unset |
+| `DEFAULT_VOICE_PIPER_RO` | `ro_RO-sanda-high` | Default Romanian voice for piper (filename, no `.onnx`) when `--voice` unset |
 | `DEFAULT_VOICE_TTS_EN` | `en-US-EmmaMultilingualNeural` | Default English voice for edge-tts (voice name) when `--voice` unset |
 | `DEFAULT_VOICE_TTS_RO` | `ro-RO-AlinaNeural` | Default Romanian voice for edge-tts (voice name) when `--voice` unset |
 | `TELEGRAM_BOT_TOKEN` | *(empty)* | Telegram bot token |
