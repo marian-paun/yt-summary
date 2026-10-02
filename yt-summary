@@ -174,6 +174,22 @@ Language: {{LANG}}
 PROMPT_EOCS
 )
 
+PROMPT_SYSTEM_PHONETIC_DEFAULT="You are a text normalization expert. Rewrite the input so it can be read aloud naturally in the target language. Output only the rewritten text. No labels, quotes, or markdown."
+
+PROMPT_USER_PHONETIC_DEFAULT=$(cat <<'PROMPT_EOP'
+Rewrite the following text for TTS in {{LANG}}.
+
+Rules:
+- Keep the same language, wording, order, and sentence breaks. Do not summarize or translate.
+- Find tokens that are not in {{LANG}} (loanwords, product names, acronyms) and replace each with a respelling a {{LANG}} reader would pronounce like the original. Romanian example: API -> ei-pi-ai, checkpoint -> cecpoint.
+- Numbers should not be spelled digit by digit - e.g. 275 should be spelled "two hundreds and seventy five" and not "two seven five" - in the respective {{LANG}}.
+- Spell acronyms letter by letter in the target spelling. Do not invent IPA or SSML.
+- If nothing needs changing, return the text unchanged.
+
+Text: {{TEXT}}
+PROMPT_EOP
+)
+
 # Escape a value for literal use inside ${var//pattern/replacement}.
 # Bash interprets '&' (matched pattern) and backslashes in the replacement;
 # sed builds the escaped form so injected transcript/summary text stays literal
@@ -236,6 +252,7 @@ fi
 : "${TTS_ENGINE:=piper}"              # TTS engine: piper or edge-tts
 : "${PIPER_BIN:=piper}"                # piper binary name or path
 : "${EDGE_TTS_BIN:=edge-tts}"          # edge-tts binary name or path
+: "${PHONETIC_TTS:=true}"              # Enable phonetic rewrite before TTS
 : "${TELEGRAM_BOT_TOKEN:=}"
 : "${TELEGRAM_CHAT_ID:=}"
 : "${TELEGRAM_API_URL:=https://api.telegram.org}"
@@ -534,6 +551,10 @@ parse_args() {
           TTS_ENGINE="$2"
           shift 2
           ;;
+      --no-phonetic)
+          PHONETIC_TTS=false
+          shift
+          ;;
       --max-playlist-videos)
           MAX_PLAYLIST_VIDEOS="$2"
           shift 2
@@ -770,6 +791,60 @@ summarize_chunk() {
 
   log_error "Failed to summarize chunk after ${max_attempts} attempts"
   return 1
+}
+
+phoneticize_for_tts() {
+  local text="$1"
+  local language="${2:-en}"
+
+  if [[ "$PHONETIC_TTS" != "true" ]]; then
+    echo "$text"
+    return 0
+  fi
+
+  local system_prompt="${PROMPT_SYSTEM_PHONETIC:-$PROMPT_SYSTEM_PHONETIC_DEFAULT}"
+  local user_prompt="${PROMPT_USER_PHONETIC:-$PROMPT_USER_PHONETIC_DEFAULT}"
+
+  user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$language")}"
+  user_prompt="${user_prompt//\{\{TEXT\}\}/$(escape_repl "$text")}"
+
+  local llm_err_file="${TMP_BASE}/llm_phonetic_stderr.err"
+  local rewrite
+  rewrite=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
+  local exit_code=$?
+
+  if [[ $exit_code -ne 0 ]]; then
+    log_warn "Phonetic rewrite failed: $(cat "$llm_err_file" 2>/dev/null || true); using original text"
+    echo "$text"
+    return 0
+  fi
+
+  if [[ -z "$rewrite" ]] || [[ "$rewrite" == "null" ]]; then
+    log_warn "Phonetic rewrite returned empty output; using original text"
+    echo "$text"
+    return 0
+  fi
+
+  local input_words output_words
+  input_words=$(echo "$text" | wc -w)
+  output_words=$(echo "$rewrite" | wc -w)
+
+  if [[ $input_words -eq 0 ]]; then
+    echo "$text"
+    return 0
+  fi
+
+  local min_words=$(( input_words / 2 ))
+  local max_words=$(( input_words * 2 ))
+
+  if [[ $output_words -lt $min_words ]] || [[ $output_words -gt $max_words ]]; then
+    log_warn "Phonetic rewrite word count outside 50-200% range (input: $input_words, output: $output_words); using original text"
+    echo "$text"
+    return 0
+  fi
+
+  log_debug "Phonetic rewrite: $input_words -> $output_words words"
+  echo "$rewrite"
 }
 
 aggregate_summary() {
@@ -1402,7 +1477,10 @@ handle_output() {
     fi
 
     declare -f stats_tic >/dev/null 2>&1 && stats_tic "tts" || true
-    generate_audio "$output" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"
+    local tts_text
+    tts_text=$(prepare_tts_text "$output")
+    tts_text=$(phoneticize_for_tts "$tts_text" "$TARGET_LANGUAGE")
+    generate_audio "$tts_text" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"
     declare -f stats_toc >/dev/null 2>&1 && stats_toc "tts" || true
   fi
 }

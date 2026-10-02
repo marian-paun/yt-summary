@@ -27,9 +27,52 @@ short synopsis on stderr and exit 1 - not the full help.
 
 ## Architecture
 
-- **Entry point**: `./yt-summary` (1329 lines)
-- **Libraries**: `lib/ollama.sh`, `lib/cache.sh`, `lib/transcript.sh`, `lib/tts.sh`, `lib/omniroute.sh`, `lib/whisper.sh`, `lib/help.sh` (usage + `.env` reference)
-- **Pipeline**: fetch transcript → split into chunks → summarize each → merge → extract key points
+- **Entry point**: `./yt-summary` (1329 lines) — main orchestrator, CLI parsing, pipeline coordination, output formatting
+- **Libraries** (sourced by the entry point):
+  - `lib/ollama.sh` — LLM API wrappers & session statistics
+    - `ollama_chat()` — primary LLM call (Ollama native API); also delegates to `litellm_chat()` when `USE_LITELLM=true`
+    - `litellm_chat()` — LiteLLM proxy (OpenAI-compatible) chat completion
+    - Statistics: `_init_stats()`, `_update_stats()`, `update_video_stats()`, `stats_snapshot()`, `stats_tic()/toc()`, `show_stats()`, `format_stats_markdown()`
+    - Model checks: `ollama_check()`, `ollama_model_exists()`
+    - `init_stats()` — public initializer
+  - `lib/omniroute.sh` — Omniroute proxy backend
+    - `omniroute_chat()` — OpenAI-compatible chat completion via Omniroute; updates stats via `_update_stats()` if available
+  - `lib/fallback.sh` — Cascading fallback backend (`LLM_BACKEND=fallback`)
+    - `fallback_chat()` — tries Omniroute → Ollama Cloud (multi-key) → Ollama Local
+    - `_omniroute_chat_fallback()`, `_ollama_cloud_chat_with_key()`, `_ollama_local_chat_fallback()` — per-tier implementations with retries
+    - `try_omniroute()`, `try_ollama_cloud()`, `try_ollama_local()` — orchestration with retry loops
+  - `lib/transcript.sh` — Transcript acquisition (yt-dlp + youtube-transcript-api + whisper fallback)
+    - `fetch_transcript_with_fallback()` — main entry: tiered fetch (1) yt-dlp manual/auto subs RO/EN, (2) any-language subs, (3) auto subs, (4) youtube-transcript-api manual, (5) youtube-transcript-api auto, (6) whisper
+    - `fetch_transcript()` — yt-dlp subtitle fetcher with language preference
+    - `_fetch_with_yt_dlp_subtitles()`, `_fetch_with_yt_dlp_auto_subs()`, `_fetch_with_yt_dlp_any_sub()` — subtitle tiers
+    - `_fetch_with_transcript_api()`, `_fetch_with_transcript_api_auto()` — python fallback
+    - `_srt_to_text()` — SRT/VTT → plain text (dedup, HTML unescape)
+    - `get_playlist_videos()` — playlist expansion with `--max-playlist-videos` / `--max-playlist-video-age-days` filters
+    - `extract_video_id()`, `get_video_title()`, `is_playlist()`, `detect_audio_language()`, `get_transcript_word_count()`
+  - `lib/whisper.sh` — whisper-ctranslate2 transcription fallback (local or remote over SSH)
+    - `whisper_transcribe()` — orchestration: download audio → (optional) SSH transfer → run whisper (transcribe ± translate) → pull output → normalize
+    - `whisper_download_audio()` — yt-dlp `-x --audio-format m4a`
+    - `_whisper_push_file()`, `_whisper_pull_file()` — rsync/scp/shared transfer
+    - `_whisper_run()` — invokes `whisper-ctranslate2` locally or via SSH (no timeout, req 2.8)
+    - `_whisper_audio_lang()`, `whisper_result_lang()` — language detection helpers
+    - `_whisper_ssh_setup()`, `_whisper_rsync_e_cmd()`, `_whisper_scp()` — SSH transport
+    - `_whisper_cleanup_remote()` — remote work dir cleanup
+  - `lib/cache.sh` — File-based summary cache with checksum validation
+    - `cache_init()`, `cache_get_path()`, `cache_has_summary()`, `cache_has_key_points()`, `cache_is_complete()`
+    - `cache_write_with_checksum()`, `cache_read()`, `cache_read_with_checksum()`, `cache_checksum()`
+  - `lib/tts.sh` — Text-to-speech (Piper / edge-tts)
+    - `generate_audio()` — dispatcher: strips markdown via `prepare_tts_text()` then calls engine
+    - `prepare_tts_text()` — removes headers, bullets, blank lines
+    - `generate_audio_piper()` — Piper TTS → WAV → ffmpeg → m4a/mp3
+    - `generate_audio_edge_tts()` — edge-tts → mp3 → (optional) ffmpeg → m4a; on failure sets `EDGE_TTS_FAILURE=fallback` for Piper retry
+    - `generate_audio_with_piper()` — resolves voice path, calls Piper
+    - `get_voice_for_language()`, `get_edge_tts_voice()` — voice resolution (defaults per language)
+    - `check_voice_exists()`, `resolve_tts_bin()` — validation helpers
+  - `lib/help.sh` — CLI help/usage rendering and `.env` reference
+    - `usage()` — dispatches `short` (synopsis), `help` (options), `all` (advanced + env + examples)
+    - `env_show()`, `env_show_secret()`, `env_entry()` — formatting helpers
+    - `suggest_option()` — typo correction for unknown flags
+- **Pipeline**: fetch transcript → split into chunks → summarize each → merge → extract key points → (optional) phonetic rewrite → (optional) TTS audio
 
 ## Dependencies
 
