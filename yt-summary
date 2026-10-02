@@ -112,11 +112,10 @@ Guidelines:
 - Write in third person
 - Maintain the tone of the summarized text
 - Omit filler words, tangents, and redundant information
-
+- Omit promotional inserts, advertising, requests for money support, etc
 Language: {{LANG}}
 
-Transcript:
-{{CHUNK_TEXT}}
+Transcript: {{CHUNK_TEXT}}
 
 Context: {{CHUNK_CONTEXT}}
 PROMPT_EOC
@@ -160,8 +159,7 @@ Format: One bullet per line, starting with "- "
 
 Language: {{LANG}}
 
-Summary:
-{{FINAL_SUMMARY}}
+Summary: {{FINAL_SUMMARY}}
 
 Source material:
 {{CHUNK_SUMMARIES}}
@@ -189,7 +187,7 @@ escape_repl() {
 : "${OLLAMA_NUM_CTX:=24000}"
 : "${CHUNK_WORDS:=900}"
 : "${AUTO_CHUNK:=true}"              # Ask the LLM for a recommended chunk size before summarizing
-: "${MAX_TOKENS:=30000}"
+: "${MAX_TOKENS:=100000}"
 : "${TEMPERATURE:=0.1}"
 : "${MAX_RETRIES:=5}"
 : "${SUMMARY_LENGTH:=medium}"
@@ -440,7 +438,7 @@ parse_args() {
           shift 2
           ;;
       --max-tokens)
-          MAX_TOKENS="${2:-30000}"
+          MAX_TOKENS="${2:-100000}"
           shift 2
           ;;
       --temperature)
