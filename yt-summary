@@ -1117,6 +1117,9 @@ split_transcript() {
 
 summarize_video() {
   local url="$1"
+  local pre_fetched_title="${2:-}"
+  local pre_fetched_duration="${3:-}"
+  local pre_fetched_language="${4:-}"
 
   source "${LIB_DIR}/ollama.sh"
   source "${LIB_DIR}/cache.sh"
@@ -1129,6 +1132,22 @@ summarize_video() {
     ollama_chat() {
       omniroute_chat "$@"
     }
+  fi
+
+  # Handle playlist FIRST - before any yt-dlp calls
+  if is_playlist "$url"; then
+    log_info "Processing playlist"
+    local videos
+    videos=$(get_playlist_videos "$url")
+      while IFS='|' read -r video_url video_title video_duration video_language video_epoch; do
+        [[ -z "$video_url" ]] && continue
+          # Pass pre-fetched metadata to avoid redundant yt-dlp calls
+          summarize_video "$video_url" "$video_title" "$video_duration" "$video_language" || {
+            log_warn "Failed to process video: $video_url"
+            continue
+        }
+      done <<< "$videos"
+      return
   fi
 
   init_stats
@@ -1159,18 +1178,20 @@ summarize_video() {
       return
   fi
 
-  if is_playlist "$url"; then
-    log_info "Processing playlist"
-    local videos
-    videos=$(get_playlist_videos "$url")
-      while IFS= read -r video_url; do
-        [[ -z "$video_url" ]] && continue
-          summarize_video "$video_url" || {
-            log_warn "Failed to process video: $video_url"
-            continue
-        }
-      done <<< "$videos"
-      return
+  # Fetch source video duration for efficiency metrics (use pre-fetched if available)
+  local source_video_duration_s=0
+  if [[ -n "$pre_fetched_duration" ]] && [[ "$pre_fetched_duration" =~ ^[0-9]+$ ]]; then
+    source_video_duration_s="$pre_fetched_duration"
+    log_info "Video duration (from playlist metadata): ${source_video_duration_s}s"
+  else
+    local duration_output
+    duration_output=$(yt-dlp --print duration --no-warnings "$url" 2>/dev/null || true)
+    if [[ -n "$duration_output" ]] && [[ "$duration_output" =~ ^[0-9]+$ ]]; then
+      source_video_duration_s="$duration_output"
+      log_info "Video duration: ${source_video_duration_s}s"
+    else
+      log_warn "Could not fetch video duration"
+    fi
   fi
 
   # Per-video timers for session statistics. "processing" spans from the moment
@@ -1179,8 +1200,13 @@ summarize_video() {
   declare -f stats_tic >/dev/null 2>&1 && stats_tic "processing" || true
 
   local title
-  title=$(get_video_title "$url")
-  log_info "Video title: $title"
+  if [[ -n "$pre_fetched_title" ]]; then
+    title="$pre_fetched_title"
+    log_info "Video title (from playlist metadata): $title"
+  else
+    title=$(get_video_title "$url")
+    log_info "Video title: $title"
+  fi
 
   if [[ "$FORCE" == "false" ]] && ! [[ "$IGNORE_PROCESSED" == "true" ]] && cache_is_complete "$video_id" "$INCLUDE_SUMMARY" "$INCLUDE_KEY_POINTS"; then
     log_info "Using cached summary"
@@ -1204,7 +1230,7 @@ summarize_video() {
   # Romanian transcript + Romanian summary; anything else -> English.
   if [[ "${LANG_EXPLICIT:-false}" != "true" ]]; then
     local audio_lang
-    audio_lang=$(detect_audio_language "$url")
+    audio_lang=$(detect_audio_language "$url" "$pre_fetched_language")
     TRANSCRIPT_LANG="$audio_lang"
     TARGET_LANGUAGE="$audio_lang"
     log_info "Detected audio language: $audio_lang"
@@ -1341,7 +1367,7 @@ summarize_video() {
   output_words=$(printf '%s' "$summarization_text" | wc -w)
 
   # Update session statistics before generating the final markdown output
-  update_video_stats "$input_words" "$output_words"
+  update_video_stats "$input_words" "$output_words" "$source_video_duration_s"
 
   # Stop the per-video timer before the document is rendered so the embedded
   # --include-stats block shows this video's completed processing time
@@ -1482,6 +1508,19 @@ handle_output() {
     tts_text=$(phoneticize_for_tts "$tts_text" "$TARGET_LANGUAGE")
     generate_audio "$tts_text" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"
     declare -f stats_toc >/dev/null 2>&1 && stats_toc "tts" || true
+
+    # Measure audio summary duration for efficiency metrics
+    if [[ -f "$output_path" ]] && command -v ffprobe >/dev/null 2>&1; then
+      local audio_duration_s
+      audio_duration_s=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$output_path" 2>/dev/null || true)
+      if [[ -n "$audio_duration_s" ]] && [[ "$audio_duration_s" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        # Convert to integer seconds for stats
+        local audio_duration_int
+        audio_duration_int=$(printf "%.0f" "$audio_duration_s")
+        log_info "Audio summary duration: ${audio_duration_int}s"
+        update_audio_duration_stats "$audio_duration_int"
+      fi
+    fi
   fi
 }
 
@@ -1589,6 +1628,8 @@ send_mqtt_stats() {
     --argjson total_whisper_ms "$(echo "$stats" | jq -r '.total_whisper_ms // 0')" \
     --argjson total_tts_ms "$(echo "$stats" | jq -r '.total_tts_ms // 0')" \
     --argjson total_processing_ms "$(echo "$stats" | jq -r '.total_processing_ms // 0')" \
+    --argjson total_source_video_duration_s "$(echo "$stats" | jq -r '.total_source_video_duration_s // 0')" \
+    --argjson total_audio_summary_duration_s "$(echo "$stats" | jq -r '.total_audio_summary_duration_s // 0')" \
     '{
       timestamp: $timestamp,
       videos_processed: $videos_processed,
@@ -1601,7 +1642,11 @@ send_mqtt_stats() {
       total_ytdlp_ms: $total_ytdlp_ms,
       total_whisper_ms: $total_whisper_ms,
       total_tts_ms: $total_tts_ms,
-      total_processing_ms: $total_processing_ms
+      total_processing_ms: $total_processing_ms,
+      total_source_video_duration_s: $total_source_video_duration_s,
+      total_audio_summary_duration_s: $total_audio_summary_duration_s,
+      text_retention_pct: (if $total_input_words > 0 then (($total_output_words / $total_input_words) * 100) else null end),
+      audio_retention_pct: (if $total_source_video_duration_s > 0 and $total_audio_summary_duration_s > 0 then (($total_audio_summary_duration_s / $total_source_video_duration_s) * 100) else null end)
       }')
 
   log_info "MQTT stats payload: $(printf '%s' "$payload" | jq -c .)"

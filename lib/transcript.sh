@@ -107,14 +107,15 @@ get_video_title() {
 get_playlist_videos() {
   local playlist_url="$1"
 
-  # If no limits are set, return all videos as before
+  # Build yt-dlp arguments with server-side filtering
+  # Include metadata: url|title|duration|language|epoch
+  local ytdlp_args=(--flat-playlist --print '%(url)s|%(title)s|%(duration)s|%(language)s|%(epoch)s' --no-warnings)
+
+  # If no limits are set, return all videos with metadata (no server-side filtering)
   if [[ "${MAX_PLAYLIST_VIDEOS:-0}" -eq 0 ]] && [[ "${MAX_PLAYLIST_VIDEO_AGE_DAYS:-0}" -eq 0 ]]; then
-    yt-dlp --flat-playlist --print '%(url)s' --no-warnings "$playlist_url" 2>/dev/null
+    yt-dlp "${ytdlp_args[@]}" "$playlist_url" 2>/dev/null
     return
   fi
-
-  # Build yt-dlp arguments with server-side filtering
-  local ytdlp_args=(--flat-playlist --print '%(url)s|%(epoch)s' --no-warnings)
 
   # Use playlist-end for count limit (works because channel videos are newest-first)
   if [[ "${MAX_PLAYLIST_VIDEOS:-0}" -gt 0 ]]; then
@@ -132,7 +133,7 @@ get_playlist_videos() {
   local temp_file
   temp_file=$(mktemp -p "${TMP_BASE}")
 
-  # Get video URLs with epoch timestamps (with server-side filtering)
+  # Get video URLs with metadata (with server-side filtering)
   yt-dlp "${ytdlp_args[@]}" "$playlist_url" 2>/dev/null > "$temp_file"
 
   # Process the results (apply any remaining local filters)
@@ -140,7 +141,7 @@ get_playlist_videos() {
   current_epoch=$(date +%s)
   local count=0
 
-  while IFS='|' read -r url epoch; do
+  while IFS='|' read -r url title duration language epoch; do
     [[ -z "$url" ]] && continue
 
     # Check count limit if set (in case dateafter returned more than needed)
@@ -155,7 +156,7 @@ get_playlist_videos() {
         continue
       fi
       # If we're only filtering by count, include them
-      echo "$url"
+      echo "$url|$title|$duration|$language|$epoch"
       count=$((count + 1))
       continue
     fi
@@ -171,7 +172,7 @@ get_playlist_videos() {
       fi
     fi
 
-    echo "$url"
+    echo "$url|$title|$duration|$language|$epoch"
     count=$((count + 1))
   done < "$temp_file"
 
@@ -697,6 +698,7 @@ get_transcript_word_count() {
 
 detect_audio_language() {
   local url="$1"
+  local pre_fetched_language="${2:-}"
   local video_id
   video_id=$(extract_video_id "$url")
 
@@ -709,6 +711,17 @@ detect_audio_language() {
   fi
 
   local lang="en"
+
+  # Use pre-fetched language if available (from playlist batch metadata)
+  if [[ -n "$pre_fetched_language" ]]; then
+    case "$pre_fetched_language" in
+      ro|ro-*) lang="ro" ;;
+      *)       lang="en" ;;
+    esac
+    echo "$lang" > "$cache_file"
+    echo "$lang"
+    return
+  fi
 
   # Primary signal: yt-dlp metadata reports the video's language.
   local reported
@@ -734,8 +747,8 @@ detect_audio_language() {
     in_manual && /^ro[[:space:]-]/ { found=1; exit }
     END { exit !found }
     '; then
-      lang="ro"
-    fi
+    lang="ro"
+  fi
 
   echo "$lang" > "$cache_file"
   echo "$lang"
