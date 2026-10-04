@@ -219,32 +219,34 @@ show_stats() {
     echo "========================================"
     echo "           Session Statistics          "
     echo "========================================"
-    printf "%-20s %s\n" "Videos processed:" "$videos"
+    printf "%-20s %s\n" "Videos:" "$videos"
     printf "%-20s %s\n" "LLM requests:" "$requests"
     printf "%-20s %s\n" "Prompt tokens:" "$prompt_tokens"
-    printf "%-20s %s\n" "Completion tokens:" "$completion_tokens"
+    printf "%-20s %s\n" "Compl. Tokens:" "$completion_tokens"
     printf "%-20s %s\n" "Total tokens:" "$total_tokens"
     printf "%-20s %s\n" "Input words:" "$input_words"
-    printf "%-20s %s\n" "Output words:" "$output_words"
-    printf "%-20s %s\n" "Text retention:" "$text_retention_pct"
-    if [[ "$ytdlp_ms" -gt 0 ]]; then
-      printf "%-20s %s\n" "YT-dlp extraction:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
-    fi
-    if [[ "$whisper_ms" -gt 0 ]]; then
-      printf "%-20s %s\n" "Whisper processing:" "$(_fmt_duration "$(( whisper_ms / 1000 ))")"
-    fi
-    printf "%-20s %s\n" "LLM duration:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
-    if [[ "$tts_ms" -gt 0 ]]; then
-      printf "%-20s %s\n" "TTS generation:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
-    fi
     if [[ "$source_video_duration_s" -gt 0 ]]; then
-      printf "%-20s %s\n" "Source video dur:" "$(_fmt_duration "$source_video_duration_s")"
+      printf "%-20s %s\n" "Src vid dur:" "$(_fmt_duration "$source_video_duration_s")"
     fi
     if [[ "$audio_summary_duration_s" -gt 0 ]]; then
-      printf "%-20s %s\n" "Audio summary dur:" "$(_fmt_duration "$audio_summary_duration_s")"
-      printf "%-20s %s\n" "Audio retention:" "$audio_retention_pct"
+      printf "%-20s %s\n" "Aud sum dur:" "$(_fmt_duration "$audio_summary_duration_s")"
     fi
-      printf "%-20s %s\n" "Total:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
+    printf "%-20s %s\n" "Output words:" "$output_words"
+    if [[ "$ytdlp_ms" -gt 0 ]]; then
+      printf "%-20s %s\n" "YT-dlp time:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
+    fi
+    if [[ "$whisper_ms" -gt 0 ]]; then
+      printf "%-20s %s\n" "Whisper time:" "$(_fmt_duration "$(( whisper_ms / 1000 ))")"
+    fi
+    printf "%-20s %s\n" "LLM time:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
+    if [[ "$tts_ms" -gt 0 ]]; then
+      printf "%-20s %s\n" "TTS time:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
+    fi
+    printf "%-20s %s\n" "Total time:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
+    printf "%-20s %s\n" "Text ret.:" "$text_retention_pct"
+    if [[ "$audio_summary_duration_s" -gt 0 && "$source_video_duration_s" -gt 0 ]]; then
+      printf "%-20s %s\n" "Audio ret.:" "$audio_retention_pct"
+    fi
     echo "========================================"
   )
 
@@ -308,26 +310,28 @@ format_stats_markdown() {
     printf '%-14s %14s\n' "Compl. Tokens:" "$completion_tokens"
     printf '%-14s %14s\n' "Total tokens:" "$total_tokens"
     printf '%-14s %14s\n' "Input words:" "$input_words"
+    if [[ "$source_video_duration_s" -gt 0 ]]; then
+      printf '%-14s %14s\n' "Src vid dur:" "$(_fmt_duration "$source_video_duration_s")"
+    fi
+    if [[ "$audio_summary_duration_s" -gt 0 ]]; then
+      printf '%-14s %14s\n' "Aud sum dur:" "$(_fmt_duration "$audio_summary_duration_s")"
+    fi
     printf '%-14s %14s\n' "Output words:" "$output_words"
-    printf '%-14s %14s\n' "Text ret.:" "$text_retention_pct"
     if [[ "$ytdlp_ms" -gt 0 ]]; then
       printf '%-14s %14s\n' "YT-dlp time:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
     fi
     if [[ "$whisper_ms" -gt 0 ]]; then
       printf '%-14s %14s\n' "Whisper time:" "$(_fmt_duration "$(( whisper_ms / 1000 ))")"
     fi
-      printf '%-14s %14s\n' "LLM time:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
+    printf '%-14s %14s\n' "LLM time:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
     if [[ "$tts_ms" -gt 0 ]]; then
       printf '%-14s %14s\n' "TTS time:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
     fi
-    if [[ "$source_video_duration_s" -gt 0 ]]; then
-      printf '%-14s %14s\n' "Src vid dur:" "$(_fmt_duration "$source_video_duration_s")"
-    fi
-    if [[ "$audio_summary_duration_s" -gt 0 ]]; then
-      printf '%-14s %14s\n' "Aud sum dur:" "$(_fmt_duration "$audio_summary_duration_s")"
+    printf '%-14s %14s\n' "Total time:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
+    printf '%-14s %14s\n' "Text ret.:" "$text_retention_pct"
+    if [[ "$audio_summary_duration_s" -gt 0 && "$source_video_duration_s" -gt 0 ]]; then
       printf '%-14s %14s\n' "Audio ret.:" "$audio_retention_pct"
     fi
-    printf '%-14s %14s\n' "Total time:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
     printf '=============================\n'
   )
 

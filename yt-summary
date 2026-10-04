@@ -1567,12 +1567,14 @@ send_telegram() {
   fi
 
   local api_url="${TELEGRAM_API_URL}/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
+  local response
 
-  if curl -s -X POST "$api_url" --data-urlencode "chat_id=${chat_id}" --data-urlencode "parse_mode=HTML" --data-urlencode "text=${text}" \
-        >/dev/null 2>&1; then
+  response=$(curl -s -X POST "$api_url" --data-urlencode "chat_id=${chat_id}" --data-urlencode "parse_mode=HTML" --data-urlencode "text=${text}" 2>&1)
+
+  if echo "$response" | grep -q '"ok":true'; then
     log_info "Telegram message sent"
   else
-    log_warn "Failed to send Telegram message"
+    log_warn "Failed to send Telegram message: $response"
   fi
 }
 
