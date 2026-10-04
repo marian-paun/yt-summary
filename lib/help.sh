@@ -83,7 +83,7 @@ TARGET:
   YouTube video URL, playlist URL, or a text file containing URLs (one per line)
 
 BACKEND & MODEL OPTIONS:
-  --backend BACKEND          LLM backend: ollama, litellm, omniroute (default: ${LLM_BACKEND})
+  --backend BACKEND          LLM backend: ollama, litellm, omniroute, fallback (default: ${LLM_BACKEND})
   -m, --model MODEL          Model name (default: ${OLLAMA_MODEL})
   --url, --proxy URL         Backend server/proxy URL (default: ${OLLAMA_HOST})
   --api-key, --key KEY       API key for LiteLLM or Omniroute
@@ -108,9 +108,10 @@ AUDIO (TTS) OPTIONS:
   --audio-output FILE        Output audio file path
   --audio-format FORMAT      Audio format: m4a or mp3 (default: ${AUDIO_FORMAT})
   --voice VOICE              Explicit voice name (overrides language selection);
-                              for piper also accepts a filename in VOICES_DIR or a path to a .onnx file
+                               for piper also accepts a filename in VOICES_DIR or a path to a .onnx file
   --tts-engine ENGINE        TTS engine: piper or edge-tts (default: ${TTS_ENGINE});
-                              edge-tts falls back to piper when it cannot reach the service
+                               edge-tts falls back to piper when it cannot reach the service
+  --no-phonetic              Disable phonetic rewrite of foreign words before TTS (default: enabled)
 
 TRANSCRIPTION FALLBACK (WHISPER) OPTIONS:
   All options below configure the whisper-ctranslate2 fallback, used when no
@@ -238,6 +239,20 @@ EOF
 
   cat <<EOF
 
+  --- LLM backend: Fallback cascade (LLM_BACKEND=fallback) ---
+  Tries Omniroute first, then Ollama Cloud (multi-key), then Ollama Local.
+EOF
+  env_entry OLLAMA_CLOUD_API_KEYS "$(env_show_secret OLLAMA_CLOUD_API_KEYS)" \
+    "Comma-separated Ollama Cloud API keys (1-3), tried in order"
+  env_entry OLLAMA_CLOUD_URL "$(env_show OLLAMA_CLOUD_URL)" \
+    "Ollama Cloud API base URL (OpenAI-compatible)"
+  env_entry OLLAMA_CLOUD_MODEL "$(env_show OLLAMA_CLOUD_MODEL)" \
+    "Model name for Ollama Cloud"
+  env_entry OLLAMA_LOCAL_MODEL "$(env_show OLLAMA_LOCAL_MODEL)" \
+    "Model name for local Ollama (last resort)"
+
+  cat <<EOF
+
   --- Summarization ---
 EOF
   env_entry SUMMARY_LENGTH "$(env_show SUMMARY_LENGTH)" \
@@ -314,6 +329,13 @@ EOF
     "Default English edge-tts voice name when --voice is unset"
   env_entry DEFAULT_VOICE_TTS_RO "$(env_show DEFAULT_VOICE_TTS_RO)" \
     "Default Romanian edge-tts voice name when --voice is unset"
+  env_entry PHONETIC_TTS "$(env_show PHONETIC_TTS)" \
+    "true enables phonetic rewrite of foreign words/acronyms before TTS" \
+    "CLI: --no-phonetic"
+  env_entry PROMPT_SYSTEM_PHONETIC "$(env_show PROMPT_SYSTEM_PHONETIC)" \
+    "System prompt for phonetic rewrite (single line)"
+  env_entry PROMPT_USER_PHONETIC "$(env_show PROMPT_USER_PHONETIC)" \
+    "User prompt for phonetic rewrite (heredoc)"
 
   cat <<EOF
 
@@ -408,7 +430,7 @@ KNOWN_LONG_OPTIONS=(
   --backend --model --url --proxy --api-key --key --host --num-ctx
   --length --language --summary-only --key-points-only --print-only --save-only
   --stats --include-stats --email --from --telegram
-  --audio --audio-output --audio-format --voice --tts-engine
+  --audio --audio-output --audio-format --voice --tts-engine --no-phonetic
   --no-whisper --whisper-host --whisper-model --whisper-ssh-user
   --whisper-ssh-auth --whisper-ssh-key --whisper-ssh-password
   --whisper-transfer --whisper-remote-dir --whisper-shared-dir

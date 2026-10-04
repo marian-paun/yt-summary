@@ -279,6 +279,14 @@ generate_audio_with_piper() {
     generate_audio_piper "$text" "$voice_path" "$output_file" "$format"
 }
 
+prepare_tts_text() {
+    local text="$1"
+    echo "$text" | sed -E 's/^[#[:space:]]*(Summary|Key Points|Key-Points|Overview|Highlights|Key Takeaways)[[:space:]]*$//gi' \
+                       | sed -E 's/^[#[:space:]]+//' \
+                       | sed -E 's/^[[:space:]]*[-*+][[:space:]]+//' \
+                       | sed -E '/^[[:space:]]*$/d'
+}
+
 generate_audio() {
     local text="$1"
     local voice_setting="$2"
@@ -288,11 +296,7 @@ generate_audio() {
     local language="${6:-en}"
     local voices_dir="${7:-${VOICES_DIR:-/data/configs/voices}}"
 
-    # Strip markdown headers, section titles, chapter markers, and bullet point markers for audio reading
-    text=$(echo "$text" | sed -E 's/^[#[:space:]]*(Summary|Key Points|Key-Points|Overview|Highlights|Key Takeaways)[[:space:]]*$//gi' \
-                       | sed -E 's/^[#[:space:]]+//' \
-                       | sed -E 's/^[[:space:]]*[-*+][[:space:]]+//' \
-                       | sed -E '/^[[:space:]]*$/d')
+    text=$(prepare_tts_text "$text")
 
     case "$tts_engine" in
         piper)

@@ -8,7 +8,7 @@ set -euo pipefail
 : "${OMNIROUTE_MODEL:=}"
 : "${OMNIROUTE_API_KEY:=}"
 : "${TEMPERATURE:=0.1}"
-: "${MAX_TOKENS:=30000}"
+: "${MAX_TOKENS:=100000}"
 
 omniroute_chat() {
   local model="$1"

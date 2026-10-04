@@ -112,11 +112,10 @@ Guidelines:
 - Write in third person
 - Maintain the tone of the summarized text
 - Omit filler words, tangents, and redundant information
-
+- Omit promotional inserts, advertising, requests for money support, etc
 Language: {{LANG}}
 
-Transcript:
-{{CHUNK_TEXT}}
+Transcript: {{CHUNK_TEXT}}
 
 Context: {{CHUNK_CONTEXT}}
 PROMPT_EOC
@@ -160,8 +159,7 @@ Format: One bullet per line, starting with "- "
 
 Language: {{LANG}}
 
-Summary:
-{{FINAL_SUMMARY}}
+Summary: {{FINAL_SUMMARY}}
 
 Source material:
 {{CHUNK_SUMMARIES}}
@@ -174,6 +172,22 @@ PROMPT_USER_CHUNKSIZE_DEFAULT=$(cat <<'PROMPT_EOCS'
 Transcript word count: {{INPUT_WORDS}}
 Language: {{LANG}}
 PROMPT_EOCS
+)
+
+PROMPT_SYSTEM_PHONETIC_DEFAULT="You are a text normalization expert. Rewrite the input so it can be read aloud naturally in the target language. Output only the rewritten text. No labels, quotes, or markdown."
+
+PROMPT_USER_PHONETIC_DEFAULT=$(cat <<'PROMPT_EOP'
+Rewrite the following text for TTS in {{LANG}}.
+
+Rules:
+- Keep the same language, wording, order, and sentence breaks. Do not summarize or translate.
+- Find tokens that are not in {{LANG}} (loanwords, product names, acronyms) and replace each with a respelling a {{LANG}} reader would pronounce like the original. Romanian example: API -> ei-pi-ai, checkpoint -> cecpoint.
+- Numbers should not be spelled digit by digit - e.g. 275 should be spelled "two hundreds and seventy five" and not "two seven five" - in the respective {{LANG}}.
+- Spell acronyms letter by letter in the target spelling. Do not invent IPA or SSML.
+- If nothing needs changing, return the text unchanged.
+
+Text: {{TEXT}}
+PROMPT_EOP
 )
 
 # Escape a value for literal use inside ${var//pattern/replacement}.
@@ -189,7 +203,7 @@ escape_repl() {
 : "${OLLAMA_NUM_CTX:=24000}"
 : "${CHUNK_WORDS:=900}"
 : "${AUTO_CHUNK:=true}"              # Ask the LLM for a recommended chunk size before summarizing
-: "${MAX_TOKENS:=30000}"
+: "${MAX_TOKENS:=100000}"
 : "${TEMPERATURE:=0.1}"
 : "${MAX_RETRIES:=5}"
 : "${SUMMARY_LENGTH:=medium}"
@@ -217,6 +231,12 @@ fi
 : "${OMNIROUTE_MODEL:=}"
 : "${OMNIROUTE_API_KEY:=}"
 
+# --- Fallback backend configuration ---
+: "${OLLAMA_CLOUD_API_KEYS:=}"         # Comma-separated list of Ollama Cloud API keys
+: "${OLLAMA_CLOUD_URL:=https://api.ollama.cloud}"  # Ollama Cloud API base URL
+: "${OLLAMA_CLOUD_MODEL:=}"            # Model name for Ollama Cloud
+: "${OLLAMA_LOCAL_MODEL:=gemma2:2b}"   # Model name for local Ollama (last resort)
+
 # --- Whisper fallback configuration (req 2.3, 2.4, 2.5) ---
 : "${WHISPER_ENABLED:=true}"         # Enable/disable whisper-ctranslate2 fallback
 : "${WHISPER_HOST:=localhost}"        # localhost or remote IP/hostname
@@ -232,6 +252,7 @@ fi
 : "${TTS_ENGINE:=piper}"              # TTS engine: piper or edge-tts
 : "${PIPER_BIN:=piper}"                # piper binary name or path
 : "${EDGE_TTS_BIN:=edge-tts}"          # edge-tts binary name or path
+: "${PHONETIC_TTS:=true}"              # Enable phonetic rewrite before TTS
 : "${TELEGRAM_BOT_TOKEN:=}"
 : "${TELEGRAM_CHAT_ID:=}"
 : "${TELEGRAM_API_URL:=https://api.telegram.org}"
@@ -434,7 +455,7 @@ parse_args() {
           shift 2
           ;;
       --max-tokens)
-          MAX_TOKENS="${2:-30000}"
+          MAX_TOKENS="${2:-100000}"
           shift 2
           ;;
       --temperature)
@@ -530,6 +551,10 @@ parse_args() {
           TTS_ENGINE="$2"
           shift 2
           ;;
+      --no-phonetic)
+          PHONETIC_TTS=false
+          shift
+          ;;
       --max-playlist-videos)
           MAX_PLAYLIST_VIDEOS="$2"
           shift 2
@@ -548,13 +573,13 @@ parse_args() {
           ;;
       --backend)
           case "$2" in
-            ollama|litellm|omniroute)
+            ollama|litellm|omniroute|fallback)
                 LLM_BACKEND="$2"
                 LLM_BACKEND_FROM_CLI="true"
                 ;;
             *)
                 usage_error "invalid value '$2' for '$1'" \
-                  "must be one of: ollama, litellm, omniroute"
+                  "must be one of: ollama, litellm, omniroute, fallback"
                 exit 1
                 ;;
             esac
@@ -766,6 +791,60 @@ summarize_chunk() {
 
   log_error "Failed to summarize chunk after ${max_attempts} attempts"
   return 1
+}
+
+phoneticize_for_tts() {
+  local text="$1"
+  local language="${2:-en}"
+
+  if [[ "$PHONETIC_TTS" != "true" ]]; then
+    echo "$text"
+    return 0
+  fi
+
+  local system_prompt="${PROMPT_SYSTEM_PHONETIC:-$PROMPT_SYSTEM_PHONETIC_DEFAULT}"
+  local user_prompt="${PROMPT_USER_PHONETIC:-$PROMPT_USER_PHONETIC_DEFAULT}"
+
+  user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$language")}"
+  user_prompt="${user_prompt//\{\{TEXT\}\}/$(escape_repl "$text")}"
+
+  local llm_err_file="${TMP_BASE}/llm_phonetic_stderr.err"
+  local rewrite
+  rewrite=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
+  local exit_code=$?
+
+  if [[ $exit_code -ne 0 ]]; then
+    log_warn "Phonetic rewrite failed: $(cat "$llm_err_file" 2>/dev/null || true); using original text"
+    echo "$text"
+    return 0
+  fi
+
+  if [[ -z "$rewrite" ]] || [[ "$rewrite" == "null" ]]; then
+    log_warn "Phonetic rewrite returned empty output; using original text"
+    echo "$text"
+    return 0
+  fi
+
+  local input_words output_words
+  input_words=$(echo "$text" | wc -w)
+  output_words=$(echo "$rewrite" | wc -w)
+
+  if [[ $input_words -eq 0 ]]; then
+    echo "$text"
+    return 0
+  fi
+
+  local min_words=$(( input_words / 2 ))
+  local max_words=$(( input_words * 2 ))
+
+  if [[ $output_words -lt $min_words ]] || [[ $output_words -gt $max_words ]]; then
+    log_warn "Phonetic rewrite word count outside 50-200% range (input: $input_words, output: $output_words); using original text"
+    echo "$text"
+    return 0
+  fi
+
+  log_debug "Phonetic rewrite: $input_words -> $output_words words"
+  echo "$rewrite"
 }
 
 aggregate_summary() {
@@ -1038,6 +1117,9 @@ split_transcript() {
 
 summarize_video() {
   local url="$1"
+  local pre_fetched_title="${2:-}"
+  local pre_fetched_duration="${3:-}"
+  local pre_fetched_language="${4:-}"
 
   source "${LIB_DIR}/ollama.sh"
   source "${LIB_DIR}/cache.sh"
@@ -1050,6 +1132,22 @@ summarize_video() {
     ollama_chat() {
       omniroute_chat "$@"
     }
+  fi
+
+  # Handle playlist FIRST - before any yt-dlp calls
+  if is_playlist "$url"; then
+    log_info "Processing playlist"
+    local videos
+    videos=$(get_playlist_videos "$url")
+      while IFS='|' read -r video_url video_title video_duration video_language video_epoch; do
+        [[ -z "$video_url" ]] && continue
+          # Pass pre-fetched metadata to avoid redundant yt-dlp calls
+          summarize_video "$video_url" "$video_title" "$video_duration" "$video_language" || {
+            log_warn "Failed to process video: $video_url"
+            continue
+        }
+      done <<< "$videos"
+      return
   fi
 
   init_stats
@@ -1080,18 +1178,20 @@ summarize_video() {
       return
   fi
 
-  if is_playlist "$url"; then
-    log_info "Processing playlist"
-    local videos
-    videos=$(get_playlist_videos "$url")
-      while IFS= read -r video_url; do
-        [[ -z "$video_url" ]] && continue
-          summarize_video "$video_url" || {
-            log_warn "Failed to process video: $video_url"
-            continue
-        }
-      done <<< "$videos"
-      return
+  # Fetch source video duration for efficiency metrics (use pre-fetched if available)
+  local source_video_duration_s=0
+  if [[ -n "$pre_fetched_duration" ]] && [[ "$pre_fetched_duration" =~ ^[0-9]+$ ]]; then
+    source_video_duration_s="$pre_fetched_duration"
+    log_info "Video duration (from playlist metadata): ${source_video_duration_s}s"
+  else
+    local duration_output
+    duration_output=$(yt-dlp --print duration --no-warnings "$url" 2>/dev/null || true)
+    if [[ -n "$duration_output" ]] && [[ "$duration_output" =~ ^[0-9]+$ ]]; then
+      source_video_duration_s="$duration_output"
+      log_info "Video duration: ${source_video_duration_s}s"
+    else
+      log_warn "Could not fetch video duration"
+    fi
   fi
 
   # Per-video timers for session statistics. "processing" spans from the moment
@@ -1100,8 +1200,13 @@ summarize_video() {
   declare -f stats_tic >/dev/null 2>&1 && stats_tic "processing" || true
 
   local title
-  title=$(get_video_title "$url")
-  log_info "Video title: $title"
+  if [[ -n "$pre_fetched_title" ]]; then
+    title="$pre_fetched_title"
+    log_info "Video title (from playlist metadata): $title"
+  else
+    title=$(get_video_title "$url")
+    log_info "Video title: $title"
+  fi
 
   if [[ "$FORCE" == "false" ]] && ! [[ "$IGNORE_PROCESSED" == "true" ]] && cache_is_complete "$video_id" "$INCLUDE_SUMMARY" "$INCLUDE_KEY_POINTS"; then
     log_info "Using cached summary"
@@ -1125,7 +1230,7 @@ summarize_video() {
   # Romanian transcript + Romanian summary; anything else -> English.
   if [[ "${LANG_EXPLICIT:-false}" != "true" ]]; then
     local audio_lang
-    audio_lang=$(detect_audio_language "$url")
+    audio_lang=$(detect_audio_language "$url" "$pre_fetched_language")
     TRANSCRIPT_LANG="$audio_lang"
     TARGET_LANGUAGE="$audio_lang"
     log_info "Detected audio language: $audio_lang"
@@ -1262,7 +1367,7 @@ summarize_video() {
   output_words=$(printf '%s' "$summarization_text" | wc -w)
 
   # Update session statistics before generating the final markdown output
-  update_video_stats "$input_words" "$output_words"
+  update_video_stats "$input_words" "$output_words" "$source_video_duration_s"
 
   # Stop the per-video timer before the document is rendered so the embedded
   # --include-stats block shows this video's completed processing time
@@ -1398,8 +1503,24 @@ handle_output() {
     fi
 
     declare -f stats_tic >/dev/null 2>&1 && stats_tic "tts" || true
-    generate_audio "$output" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"
+    local tts_text
+    tts_text=$(prepare_tts_text "$output")
+    tts_text=$(phoneticize_for_tts "$tts_text" "$TARGET_LANGUAGE")
+    generate_audio "$tts_text" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"
     declare -f stats_toc >/dev/null 2>&1 && stats_toc "tts" || true
+
+    # Measure audio summary duration for efficiency metrics
+    if [[ -f "$output_path" ]] && command -v ffprobe >/dev/null 2>&1; then
+      local audio_duration_s
+      audio_duration_s=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$output_path" 2>/dev/null || true)
+      if [[ -n "$audio_duration_s" ]] && [[ "$audio_duration_s" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        # Convert to integer seconds for stats
+        local audio_duration_int
+        audio_duration_int=$(printf "%.0f" "$audio_duration_s")
+        log_info "Audio summary duration: ${audio_duration_int}s"
+        update_audio_duration_stats "$audio_duration_int"
+      fi
+    fi
   fi
 }
 
@@ -1446,12 +1567,14 @@ send_telegram() {
   fi
 
   local api_url="${TELEGRAM_API_URL}/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
+  local response
 
-  if curl -s -X POST "$api_url" --data-urlencode "chat_id=${chat_id}" --data-urlencode "parse_mode=HTML" --data-urlencode "text=${text}" \
-        >/dev/null 2>&1; then
+  response=$(curl -s -X POST "$api_url" --data-urlencode "chat_id=${chat_id}" --data-urlencode "parse_mode=HTML" --data-urlencode "text=${text}" 2>&1)
+
+  if echo "$response" | grep -q '"ok":true'; then
     log_info "Telegram message sent"
   else
-    log_warn "Failed to send Telegram message"
+    log_warn "Failed to send Telegram message: $response"
   fi
 }
 
@@ -1507,6 +1630,8 @@ send_mqtt_stats() {
     --argjson total_whisper_ms "$(echo "$stats" | jq -r '.total_whisper_ms // 0')" \
     --argjson total_tts_ms "$(echo "$stats" | jq -r '.total_tts_ms // 0')" \
     --argjson total_processing_ms "$(echo "$stats" | jq -r '.total_processing_ms // 0')" \
+    --argjson total_source_video_duration_s "$(echo "$stats" | jq -r '.total_source_video_duration_s // 0')" \
+    --argjson total_audio_summary_duration_s "$(echo "$stats" | jq -r '.total_audio_summary_duration_s // 0')" \
     '{
       timestamp: $timestamp,
       videos_processed: $videos_processed,
@@ -1519,7 +1644,11 @@ send_mqtt_stats() {
       total_ytdlp_ms: $total_ytdlp_ms,
       total_whisper_ms: $total_whisper_ms,
       total_tts_ms: $total_tts_ms,
-      total_processing_ms: $total_processing_ms
+      total_processing_ms: $total_processing_ms,
+      total_source_video_duration_s: $total_source_video_duration_s,
+      total_audio_summary_duration_s: $total_audio_summary_duration_s,
+      text_retention_pct: (if $total_input_words > 0 then (($total_output_words / $total_input_words) * 100) else null end),
+      audio_retention_pct: (if $total_source_video_duration_s > 0 and $total_audio_summary_duration_s > 0 then (($total_audio_summary_duration_s / $total_source_video_duration_s) * 100) else null end)
       }')
 
   log_info "MQTT stats payload: $(printf '%s' "$payload" | jq -c .)"
@@ -1676,6 +1805,13 @@ main() {
     }
   elif [[ "$LLM_BACKEND" == "litellm" ]]; then
     log_info "Using LiteLLM backend: $LITELLM_PROXY_URL with model: $LLM_MODEL"
+  elif [[ "$LLM_BACKEND" == "fallback" ]]; then
+    log_info "Using Fallback backend: Omniroute -> Ollama Cloud -> Ollama Local"
+    source "${LIB_DIR}/fallback.sh"
+
+    ollama_chat() {
+      fallback_chat "$@"
+    }
   else
     # Ollama mode - perform Ollama checks
     ollama_check

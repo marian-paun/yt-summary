@@ -5,7 +5,7 @@ set -euo pipefail
 
 : "${OLLAMA_HOST:=http://localhost:11434}"
 : "${OLLAMA_NUM_CTX:=24000}"
-: "${MAX_TOKENS:=30000}"
+: "${MAX_TOKENS:=100000}"
 : "${TEMPERATURE:=0.1}"
 : "${USE_LITELLM:=false}"
 : "${LITELLM_PROXY_URL:=}"
@@ -30,7 +30,9 @@ _init_stats() {
   "total_ytdlp_ms": 0,
   "total_whisper_ms": 0,
   "total_tts_ms": 0,
-  "total_processing_ms": 0
+  "total_processing_ms": 0,
+  "total_source_video_duration_s": 0,
+  "total_audio_summary_duration_s": 0
 }
 EOF
     fi
@@ -59,13 +61,15 @@ _update_stats() {
 update_video_stats() {
   local input_words="${1:-0}"
   local output_words="${2:-0}"
+  local source_video_duration_s="${3:-0}"
 
   (
     flock -x 200
-    jq --argjson input_words "$input_words" --argjson output_words "$output_words" \
+    jq --argjson input_words "$input_words" --argjson output_words "$output_words" --argjson source_video_duration_s "$source_video_duration_s" \
       '.videos_processed += 1 |
        .total_input_words += $input_words |
-       .total_output_words += $output_words' \
+       .total_output_words += $output_words |
+       .total_source_video_duration_s += $source_video_duration_s' \
     "$STATS_FILE" > "${STATS_FILE}.tmp"
     mv "${STATS_FILE}.tmp" "$STATS_FILE"
   ) 200>"$STATS_LOCK"
@@ -95,7 +99,9 @@ _stats_delta() {
     total_ytdlp_ms:      ($c.total_ytdlp_ms      - $s.total_ytdlp_ms),
     total_whisper_ms:    ($c.total_whisper_ms    - $s.total_whisper_ms),
     total_tts_ms:        ($c.total_tts_ms        - $s.total_tts_ms),
-    total_processing_ms: ($c.total_processing_ms - $s.total_processing_ms)
+    total_processing_ms: ($c.total_processing_ms - $s.total_processing_ms),
+    total_source_video_duration_s: ($c.total_source_video_duration_s - $s.total_source_video_duration_s),
+    total_audio_summary_duration_s: ($c.total_audio_summary_duration_s - $s.total_audio_summary_duration_s)
     }' "${STATS_FILE}.snapshot" "$STATS_FILE"
 }
 
@@ -111,11 +117,29 @@ _stats_add_duration() {
   [[ "$duration_ms" -gt 0 ]] || return 0
 
   (
-   flock -x 200
-   jq --arg key "total_${tag}_ms" --argjson dur "$duration_ms" \
-     '.[$key] = ((.[$key] // 0) + $dur)' \
-     "$STATS_FILE" > "${STATS_FILE}.tmp"
-   mv "${STATS_FILE}.tmp" "$STATS_FILE"
+flock -x 200
+    jq --arg key "total_${tag}_ms" --argjson dur "$duration_ms" \
+      '.[$key] = ((.[$key] // 0) + $dur)' \
+      "$STATS_FILE" > "${STATS_FILE}.tmp"
+    mv "${STATS_FILE}.tmp" "$STATS_FILE"
+   ) 200>"$STATS_LOCK"
+}
+
+# Update the total audio summary duration (seconds) after TTS generation.
+update_audio_duration_stats() {
+  local audio_summary_duration_s="${1:-0}"
+
+  if [[ "$TESTING_MODE" == "true" ]]; then
+    return 0  # Skip stats update in testing mode
+  fi
+  [[ "$audio_summary_duration_s" -gt 0 ]] || return 0
+
+  (
+    flock -x 200
+    jq --argjson dur "$audio_summary_duration_s" \
+      '.total_audio_summary_duration_s += $dur' \
+      "$STATS_FILE" > "${STATS_FILE}.tmp"
+    mv "${STATS_FILE}.tmp" "$STATS_FILE"
   ) 200>"$STATS_LOCK"
 }
 
@@ -161,7 +185,8 @@ show_stats() {
   stats=$(cat "$STATS_FILE")
 
   local requests prompt_tokens completion_tokens input_words output_words \
-        duration_ms videos ytdlp_ms whisper_ms tts_ms processing_ms
+        duration_ms videos ytdlp_ms whisper_ms tts_ms processing_ms \
+        source_video_duration_s audio_summary_duration_s
   requests=$(echo "$stats" | jq -r '.total_requests')
   prompt_tokens=$(echo "$stats" | jq -r '.total_prompt_tokens')
   completion_tokens=$(echo "$stats" | jq -r '.total_completion_tokens')
@@ -173,8 +198,20 @@ show_stats() {
   whisper_ms=$(echo "$stats" | jq -r '.total_whisper_ms // 0')
   tts_ms=$(echo "$stats" | jq -r '.total_tts_ms // 0')
   processing_ms=$(echo "$stats" | jq -r '.total_processing_ms // 0')
+  source_video_duration_s=$(echo "$stats" | jq -r '.total_source_video_duration_s // 0')
+  audio_summary_duration_s=$(echo "$stats" | jq -r '.total_audio_summary_duration_s // 0')
 
   local total_tokens=$((prompt_tokens + completion_tokens))
+
+  # Calculate efficiency percentages
+  local text_retention_pct="N/A"
+  local audio_retention_pct="N/A"
+  if [[ "$input_words" -gt 0 ]]; then
+    text_retention_pct=$(awk -v out="$output_words" -v inp="$input_words" 'BEGIN { printf "%.1f%%", (out/inp)*100 }')
+  fi
+  if [[ "$source_video_duration_s" -gt 0 && "$audio_summary_duration_s" -gt 0 ]]; then
+    audio_retention_pct=$(awk -v aud="$audio_summary_duration_s" -v src="$source_video_duration_s" 'BEGIN { printf "%.1f%%", (aud/src)*100 }')
+  fi
 
   local stats_output
   stats_output=$(
@@ -182,24 +219,34 @@ show_stats() {
     echo "========================================"
     echo "           Session Statistics          "
     echo "========================================"
-    printf "%-20s %s\n" "Videos processed:" "$videos"
+    printf "%-20s %s\n" "Videos:" "$videos"
     printf "%-20s %s\n" "LLM requests:" "$requests"
     printf "%-20s %s\n" "Prompt tokens:" "$prompt_tokens"
-    printf "%-20s %s\n" "Completion tokens:" "$completion_tokens"
+    printf "%-20s %s\n" "Compl. Tokens:" "$completion_tokens"
     printf "%-20s %s\n" "Total tokens:" "$total_tokens"
     printf "%-20s %s\n" "Input words:" "$input_words"
+    if [[ "$source_video_duration_s" -gt 0 ]]; then
+      printf "%-20s %s\n" "Src vid dur:" "$(_fmt_duration "$source_video_duration_s")"
+    fi
+    if [[ "$audio_summary_duration_s" -gt 0 ]]; then
+      printf "%-20s %s\n" "Aud sum dur:" "$(_fmt_duration "$audio_summary_duration_s")"
+    fi
     printf "%-20s %s\n" "Output words:" "$output_words"
     if [[ "$ytdlp_ms" -gt 0 ]]; then
-      printf "%-20s %s\n" "YT-dlp extraction:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
+      printf "%-20s %s\n" "YT-dlp time:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
     fi
     if [[ "$whisper_ms" -gt 0 ]]; then
-      printf "%-20s %s\n" "Whisper processing:" "$(_fmt_duration "$(( whisper_ms / 1000 ))")"
+      printf "%-20s %s\n" "Whisper time:" "$(_fmt_duration "$(( whisper_ms / 1000 ))")"
     fi
-    printf "%-20s %s\n" "LLM duration:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
+    printf "%-20s %s\n" "LLM time:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
     if [[ "$tts_ms" -gt 0 ]]; then
-      printf "%-20s %s\n" "TTS generation:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
+      printf "%-20s %s\n" "TTS time:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
     fi
-      printf "%-20s %s\n" "Total:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
+    printf "%-20s %s\n" "Total time:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
+    printf "%-20s %s\n" "Text ret.:" "$text_retention_pct"
+    if [[ "$audio_summary_duration_s" -gt 0 && "$source_video_duration_s" -gt 0 ]]; then
+      printf "%-20s %s\n" "Audio ret.:" "$audio_retention_pct"
+    fi
     echo "========================================"
   )
 
@@ -223,7 +270,8 @@ format_stats_markdown() {
   fi
 
   local requests prompt_tokens completion_tokens input_words output_words \
-        duration_ms videos ytdlp_ms whisper_ms tts_ms processing_ms
+        duration_ms videos ytdlp_ms whisper_ms tts_ms processing_ms \
+        source_video_duration_s audio_summary_duration_s
   requests=$(echo "$stats" | jq -r '.total_requests')
   prompt_tokens=$(echo "$stats" | jq -r '.total_prompt_tokens')
   completion_tokens=$(echo "$stats" | jq -r '.total_completion_tokens')
@@ -235,8 +283,20 @@ format_stats_markdown() {
   whisper_ms=$(echo "$stats" | jq -r '.total_whisper_ms // 0')
   tts_ms=$(echo "$stats" | jq -r '.total_tts_ms // 0')
   processing_ms=$(echo "$stats" | jq -r '.total_processing_ms // 0')
+  source_video_duration_s=$(echo "$stats" | jq -r '.total_source_video_duration_s // 0')
+  audio_summary_duration_s=$(echo "$stats" | jq -r '.total_audio_summary_duration_s // 0')
 
   local total_tokens=$((prompt_tokens + completion_tokens))
+
+  # Calculate efficiency percentages
+  local text_retention_pct="N/A"
+  local audio_retention_pct="N/A"
+  if [[ "$input_words" -gt 0 ]]; then
+    text_retention_pct=$(awk -v out="$output_words" -v inp="$input_words" 'BEGIN { printf "%.1f%%", (out/inp)*100 }')
+  fi
+  if [[ "$source_video_duration_s" -gt 0 && "$audio_summary_duration_s" -gt 0 ]]; then
+    audio_retention_pct=$(awk -v aud="$audio_summary_duration_s" -v src="$source_video_duration_s" 'BEGIN { printf "%.1f%%", (aud/src)*100 }')
+  fi
 
   local stats_output
   # Every line must stay <= 29 columns: the Telegram message is sent inside a
@@ -250,6 +310,12 @@ format_stats_markdown() {
     printf '%-14s %14s\n' "Compl. Tokens:" "$completion_tokens"
     printf '%-14s %14s\n' "Total tokens:" "$total_tokens"
     printf '%-14s %14s\n' "Input words:" "$input_words"
+    if [[ "$source_video_duration_s" -gt 0 ]]; then
+      printf '%-14s %14s\n' "Src vid dur:" "$(_fmt_duration "$source_video_duration_s")"
+    fi
+    if [[ "$audio_summary_duration_s" -gt 0 ]]; then
+      printf '%-14s %14s\n' "Aud sum dur:" "$(_fmt_duration "$audio_summary_duration_s")"
+    fi
     printf '%-14s %14s\n' "Output words:" "$output_words"
     if [[ "$ytdlp_ms" -gt 0 ]]; then
       printf '%-14s %14s\n' "YT-dlp time:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
@@ -257,11 +323,15 @@ format_stats_markdown() {
     if [[ "$whisper_ms" -gt 0 ]]; then
       printf '%-14s %14s\n' "Whisper time:" "$(_fmt_duration "$(( whisper_ms / 1000 ))")"
     fi
-      printf '%-14s %14s\n' "LLM time:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
+    printf '%-14s %14s\n' "LLM time:" "$(_fmt_duration "$(( duration_ms / 1000 ))")"
     if [[ "$tts_ms" -gt 0 ]]; then
       printf '%-14s %14s\n' "TTS time:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
     fi
     printf '%-14s %14s\n' "Total time:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
+    printf '%-14s %14s\n' "Text ret.:" "$text_retention_pct"
+    if [[ "$audio_summary_duration_s" -gt 0 && "$source_video_duration_s" -gt 0 ]]; then
+      printf '%-14s %14s\n' "Audio ret.:" "$audio_retention_pct"
+    fi
     printf '=============================\n'
   )
 
