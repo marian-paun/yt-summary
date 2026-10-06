@@ -149,7 +149,7 @@ usage_advanced() {
   cat <<EOF
 
 ADVANCED & LEGACY OPTIONS:
-  --think                    Enable Ollama think mode
+  --think                    Enable think/reasoning mode (Ollama, Omniroute, LiteLLM, Fallback)
   --chunk-words WORDS        Target words per chunk (default: ${CHUNK_WORDS}; disables auto chunk size)
   --auto-chunk               Ask the LLM for the recommended chunk size before summarizing
                              (default: ${AUTO_CHUNK})

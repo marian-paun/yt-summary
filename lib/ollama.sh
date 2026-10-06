@@ -305,18 +305,23 @@ format_stats_markdown() {
   stats_output=$(
     printf '\n=============================\n           Session Statistics\n=============================\n'
     printf '%-14s %14s\n' "Videos:" "$videos"
+    printf '\n'
     printf '%-14s %14s\n' "LLM requests:" "$requests"
+    printf '\n'
     printf '%-14s %14s\n' "Prompt tokens:" "$prompt_tokens"
     printf '%-14s %14s\n' "Compl. Tokens:" "$completion_tokens"
     printf '%-14s %14s\n' "Total tokens:" "$total_tokens"
+    printf '\n'
     printf '%-14s %14s\n' "Input words:" "$input_words"
+    printf '%-14s %14s\n' "Output words:" "$output_words"
+    printf '\n'
     if [[ "$source_video_duration_s" -gt 0 ]]; then
       printf '%-14s %14s\n' "Src vid dur:" "$(_fmt_duration "$source_video_duration_s")"
     fi
     if [[ "$audio_summary_duration_s" -gt 0 ]]; then
       printf '%-14s %14s\n' "Aud sum dur:" "$(_fmt_duration "$audio_summary_duration_s")"
     fi
-    printf '%-14s %14s\n' "Output words:" "$output_words"
+    printf '\n'
     if [[ "$ytdlp_ms" -gt 0 ]]; then
       printf '%-14s %14s\n' "YT-dlp time:" "$(_fmt_duration "$(( ytdlp_ms / 1000 ))")"
     fi
@@ -328,6 +333,7 @@ format_stats_markdown() {
       printf '%-14s %14s\n' "TTS time:" "$(_fmt_duration "$(( tts_ms / 1000 ))")"
     fi
     printf '%-14s %14s\n' "Total time:" "$(_fmt_duration "$(( processing_ms / 1000 ))")"
+    printf '\n'
     printf '%-14s %14s\n' "Text ret.:" "$text_retention_pct"
     if [[ "$audio_summary_duration_s" -gt 0 && "$source_video_duration_s" -gt 0 ]]; then
       printf '%-14s %14s\n' "Audio ret.:" "$audio_retention_pct"
@@ -363,6 +369,7 @@ litellm_chat() {
   local model="$1"
   local system="${2:-}"
   local user="$3"
+  local think="${4:-false}"
 
   local model_name="${LITELLM_MODEL:-$model}"
 
@@ -377,6 +384,7 @@ litellm_chat() {
     --argjson temperature "$TEMPERATURE" \
     --argjson max_tokens "$MAX_TOKENS" \
     --argjson stream false \
+    --argjson think "$think" \
     '{
       model: $model,
       messages: [
@@ -386,7 +394,7 @@ litellm_chat() {
       temperature: $temperature,
       max_tokens: $max_tokens,
       stream: $stream
-      }')
+      } + (if $think then {think: true} else {} end)')
 
   # Build curl headers
   local headers=("-H" "Content-Type: application/json")
@@ -432,10 +440,11 @@ ollama_chat() {
   local model="$1"
   local system="$2"
   local user="$3"
+  local think="${4:-false}"
 
   # If using LiteLLM, delegate to LiteLLM
   if [[ "$USE_LITELLM" == "true" ]]; then
-    litellm_chat "$model" "$system" "$user"
+    litellm_chat "$model" "$system" "$user" "$think"
     return $?
   fi
 
@@ -455,13 +464,15 @@ ollama_chat() {
     --argjson temperature "$TEMPERATURE" \
     --argjson num_predict "$MAX_TOKENS" \
     --argjson num_ctx "$OLLAMA_NUM_CTX" \
+    --argjson think "$think" \
     '{
       model: $model,
       stream: false,
       options: {
                 temperature: $temperature,
                 num_predict: $num_predict,
-                num_ctx: $num_ctx
+                num_ctx: $num_ctx,
+                think: $think
       },
       messages: [
                 {role: "system", content: $system},

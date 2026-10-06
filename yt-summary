@@ -11,7 +11,7 @@ LIB_DIR="${SCRIPT_DIR}/lib"
 # no command substitution, comments and blank lines ignored.
 # .env must contain plain KEY=VALUE lines; values may be quoted.
 load_env_file() {
-  local env_file="${1:-${SCRIPT_DIR}/.env}"
+  local env_file="${SCRIPT_DIR}/.env"
   [[ -f "$env_file" ]] || return 0
 
   # Warn if the env file is world/group readable — it may contain secrets.
@@ -294,7 +294,7 @@ SAVE_OUTPUT=true
 VERBOSE=false
 SHOW_STATS=false
 SHOW_STATS_IN_OUTPUT=false
-THINK=true
+THINK=false
 EMAIL_TO=""
 : "${EMAIL_FROM:=}"
 TESTING_MODE=false
@@ -758,7 +758,7 @@ summarize_chunk() {
   while [[ $attempt -lt $max_attempts ]]; do
     log_debug "Summarizing chunk (attempt $((attempt + 1))/$max_attempts)"
 
-    llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
+    llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" "$THINK" 2>"$llm_err_file")
     local exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
@@ -812,7 +812,7 @@ phoneticize_for_tts() {
 
   local llm_err_file="${TMP_BASE}/llm_phonetic_stderr.err"
   local rewrite
-  rewrite=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
+  rewrite=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" "$THINK" 2>"$llm_err_file")
   local exit_code=$?
 
   if [[ $exit_code -ne 0 ]]; then
@@ -856,7 +856,6 @@ aggregate_summary() {
   local language="${4:-en}"
 
   local source_words=0
-  local formatted_chunks=""
 
   local min_words_ratio
   case "$SUMMARY_LENGTH" in
@@ -901,7 +900,7 @@ aggregate_summary() {
   while [[ $attempt -lt $max_attempts ]]; do
     log_debug "Aggregating summary (attempt $((attempt + 1))/$max_attempts)"
 
-    llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
+    llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" "$THINK" 2>"$llm_err_file")
     local exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
@@ -967,7 +966,7 @@ generate_key_points() {
   while [[ $attempt -lt $max_attempts ]]; do
     log_debug "Generating key points (attempt $((attempt + 1))/$max_attempts)"
 
-    llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$llm_err_file")
+    llm_response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" "$THINK" 2>"$llm_err_file")
     local exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
@@ -1025,7 +1024,7 @@ recommend_chunk_words() {
 
     local response=""
     local error_output=""
-    response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" 2>"$stderr_file")
+    response=$(ollama_chat "$LLM_MODEL" "$system_prompt" "$user_prompt" "$THINK" 2>"$stderr_file")
     local exit_code=$?
     error_output=$(cat "$stderr_file" 2>/dev/null || true)
 
@@ -1064,9 +1063,6 @@ split_transcript() {
   log_debug "Splitting transcript file: $transcript_file (target: $target_chunk_words words per chunk)"
 
   # Use awk for efficient word-based chunk splitting
-  local chunk_num=0
-  local current_words=0
-
   # awk script: splits text into chunks of target_chunk_words words
   # Outputs chunk files and prints the chunks_dir at the end
   awk -v target="$target_chunk_words" -v dir="$chunks_dir" -v video="$video_id" '
@@ -1141,7 +1137,7 @@ summarize_video() {
     log_info "Processing playlist"
     local videos
     videos=$(get_playlist_videos "$url")
-      while IFS='|' read -r video_url video_title video_duration video_language video_epoch; do
+      while IFS='|' read -r video_url video_title video_duration video_language _; do
         [[ -z "$video_url" ]] && continue
           # Pass pre-fetched metadata to avoid redundant yt-dlp calls
           summarize_video "$video_url" "$video_title" "$video_duration" "$video_language" || {
