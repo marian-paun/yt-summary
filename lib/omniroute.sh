@@ -14,6 +14,7 @@ omniroute_chat() {
   local model="$1"
   local system="${2:-}"
   local user="$3"
+  local think="${4:-false}"
 
   local model_name="${OMNIROUTE_MODEL:-$model}"
 
@@ -25,23 +26,31 @@ omniroute_chat() {
   printf '%s' "$system" > "$tmp_dir/system.txt"
   printf '%s' "$user" > "$tmp_dir/user.txt"
 
+  # Map think boolean to reasoning_effort
+  local reasoning_effort="none"
+  if [[ "$think" == "true" ]]; then
+    reasoning_effort="medium"
+  fi
+
   jq -n \
     --arg model "$model_name" \
     --rawfile system "$tmp_dir/system.txt" \
     --rawfile user "$tmp_dir/user.txt" \
     --argjson temperature "$TEMPERATURE" \
     --argjson max_tokens "$MAX_TOKENS" \
-   --argjson stream false \
-   '{
-     model: $model,
-     messages: [
-       {role: "system", content: $system},
-       {role: "user", content: $user}
-     ],
-     temperature: $temperature,
-     max_tokens: $max_tokens,
-     stream: $stream
-    }' > "$tmp_dir/request.json"
+    --argjson stream false \
+    --arg reasoning_effort "$reasoning_effort" \
+    '{
+      model: $model,
+      messages: [
+        {role: "system", content: $system},
+        {role: "user", content: $user}
+      ],
+      temperature: $temperature,
+      max_tokens: $max_tokens,
+      stream: $stream,
+      reasoning_effort: $reasoning_effort
+     }' > "$tmp_dir/request.json"
 
   local headers=("-H" "Content-Type: application/json")
   if [[ -n "$OMNIROUTE_API_KEY" ]]; then

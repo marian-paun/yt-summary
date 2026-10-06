@@ -16,6 +16,7 @@ _omniroute_chat_fallback() {
   local model="$1"
   local system="${2:-}"
   local user="$3"
+  local think="${4:-false}"
 
   local model_name="${OMNIROUTE_MODEL:-$model}"
 
@@ -27,6 +28,11 @@ _omniroute_chat_fallback() {
   printf '%s' "$system" > "$tmp_dir/system.txt"
   printf '%s' "$user" > "$tmp_dir/user.txt"
 
+  local reasoning_effort="none"
+  if [[ "$think" == "true" ]]; then
+    reasoning_effort="medium"
+  fi
+
   jq -n \
     --arg model "$model_name" \
     --rawfile system "$tmp_dir/system.txt" \
@@ -34,6 +40,7 @@ _omniroute_chat_fallback() {
     --argjson temperature "$TEMPERATURE" \
     --argjson max_tokens "$MAX_TOKENS" \
     --argjson stream false \
+    --arg reasoning_effort "$reasoning_effort" \
     '{
       model: $model,
       messages: [
@@ -42,8 +49,9 @@ _omniroute_chat_fallback() {
       ],
       temperature: $temperature,
       max_tokens: $max_tokens,
-      stream: $stream
-     }' > "$tmp_dir/request.json"
+      stream: $stream,
+      reasoning_effort: $reasoning_effort
+      }' > "$tmp_dir/request.json"
 
   local headers=("-H" "Content-Type: application/json")
   if [[ -n "${OMNIROUTE_API_KEY:-}" ]]; then
@@ -90,6 +98,7 @@ _ollama_cloud_chat_with_key() {
   local system="$2"
   local user="$3"
   local api_key="$4"
+  local think="${5:-false}"
 
   local model_name="${OLLAMA_CLOUD_MODEL:-$model}"
 
@@ -101,6 +110,11 @@ _ollama_cloud_chat_with_key() {
   printf '%s' "$system" > "$tmp_dir/system.txt"
   printf '%s' "$user" > "$tmp_dir/user.txt"
 
+  local reasoning_effort="none"
+  if [[ "$think" == "true" ]]; then
+    reasoning_effort="medium"
+  fi
+
   jq -n \
     --arg model "$model_name" \
     --rawfile system "$tmp_dir/system.txt" \
@@ -108,6 +122,7 @@ _ollama_cloud_chat_with_key() {
     --argjson temperature "$TEMPERATURE" \
     --argjson max_tokens "$MAX_TOKENS" \
     --argjson stream false \
+    --arg reasoning_effort "$reasoning_effort" \
     '{
       model: $model,
       messages: [
@@ -116,8 +131,9 @@ _ollama_cloud_chat_with_key() {
       ],
       temperature: $temperature,
       max_tokens: $max_tokens,
-      stream: $stream
-     }' > "$tmp_dir/request.json"
+      stream: $stream,
+      reasoning_effort: $reasoning_effort
+      }' > "$tmp_dir/request.json"
 
   local response
   response=$(curl -s --max-time 300 -X POST "${OLLAMA_CLOUD_URL}/v1/chat/completions" \
@@ -161,6 +177,7 @@ _ollama_local_chat_fallback() {
   local model="$1"
   local system="$2"
   local user="$3"
+  local think="${4:-false}"
 
   local model_name="${OLLAMA_LOCAL_MODEL:-$model}"
   local ollama_host="http://localhost:11434"
@@ -178,13 +195,15 @@ _ollama_local_chat_fallback() {
     --argjson temperature "$TEMPERATURE" \
     --argjson num_predict "$MAX_TOKENS" \
     --argjson num_ctx "${OLLAMA_NUM_CTX:-24000}" \
+    --argjson think "$think" \
     '{
       model: $model,
       stream: false,
       options: {
                 temperature: $temperature,
                 num_predict: $num_predict,
-                num_ctx: $num_ctx
+                num_ctx: $num_ctx,
+                think: $think
       },
       messages: [
                 {role: "system", content: $system},
@@ -229,10 +248,11 @@ try_omniroute() {
   local model="$1"
   local system="$2"
   local user="$3"
+  local think="${4:-false}"
 
   local attempt=0
   while [[ $attempt -lt $MAX_RETRIES ]]; do
-    if _omniroute_chat_fallback "$model" "$system" "$user"; then
+    if _omniroute_chat_fallback "$model" "$system" "$user" "$think"; then
       return 0
     fi
     attempt=$((attempt + 1))
@@ -245,6 +265,7 @@ try_ollama_cloud() {
   local model="$1"
   local system="$2"
   local user="$3"
+  local think="${4:-false}"
 
   if [[ -z "$OLLAMA_CLOUD_API_KEYS" ]]; then
     return 1
@@ -260,7 +281,7 @@ try_ollama_cloud() {
 
     local attempt=0
     while [[ $attempt -lt $MAX_RETRIES ]]; do
-      if _ollama_cloud_chat_with_key "$model" "$system" "$user" "$key"; then
+      if _ollama_cloud_chat_with_key "$model" "$system" "$user" "$key" "$think"; then
         return 0
       fi
       attempt=$((attempt + 1))
@@ -274,10 +295,11 @@ try_ollama_local() {
   local model="$1"
   local system="$2"
   local user="$3"
+  local think="${4:-false}"
 
   local attempt=0
   while [[ $attempt -lt $MAX_RETRIES ]]; do
-    if _ollama_local_chat_fallback "$model" "$system" "$user"; then
+    if _ollama_local_chat_fallback "$model" "$system" "$user" "$think"; then
       return 0
     fi
     attempt=$((attempt + 1))
@@ -290,23 +312,24 @@ fallback_chat() {
   local model="$1"
   local system="$2"
   local user="$3"
+  local think="${4:-false}"
 
   log_info "Fallback: trying Omniroute..."
-  if try_omniroute "$model" "$system" "$user"; then
+  if try_omniroute "$model" "$system" "$user" "$think"; then
     return 0
   fi
   log_warn "Omniroute failed after $MAX_RETRIES attempts"
 
   if [[ -n "$OLLAMA_CLOUD_API_KEYS" ]]; then
     log_info "Fallback: trying Ollama Cloud..."
-    if try_ollama_cloud "$model" "$system" "$user"; then
+    if try_ollama_cloud "$model" "$system" "$user" "$think"; then
       return 0
     fi
     log_warn "Ollama Cloud failed (all keys exhausted)"
   fi
 
   log_info "Fallback: trying Ollama Local..."
-  if try_ollama_local "$model" "$system" "$user"; then
+  if try_ollama_local "$model" "$system" "$user" "$think"; then
     return 0
   fi
   log_error "All fallback backends failed"

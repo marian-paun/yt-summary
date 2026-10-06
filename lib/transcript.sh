@@ -428,7 +428,7 @@ _fetch_with_yt_dlp_auto_subs() {
     "https://youtube.com/watch?v=${video_id}" > /dev/null 2>&1 || true
 
   local sub_file
-  sub_file=$(find "$temp_dir" -name "*.srt" -o -name "*.vtt" -print -quit)
+  sub_file=$(find "$temp_dir" \( -name "*.srt" -o -name "*.vtt" \) -print -quit)
   if [[ -n "$sub_file" ]] && [[ -f "$sub_file" ]]; then
     log_transcript_debug "Found auto-generated subtitle file: $sub_file"
     TRANSCRIPT_DETECTED_LANG="$(_subtitle_file_lang "$sub_file")"
