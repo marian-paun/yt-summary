@@ -113,6 +113,7 @@ Guidelines:
 - Maintain the tone of the summarized text
 - Omit filler words, tangents, and redundant information
 - Omit promotional inserts, advertising, requests for money support, etc
+- Do not repeat yourself
 Language: {{LANG}}
 
 Transcript: {{CHUNK_TEXT}}
@@ -132,6 +133,7 @@ Rules:
 - Resolve contradictions by preferring later chunks
 - Create smooth transitions between topics
 - Preserve all unique facts, numbers, and names
+- Do not repeat the same information more than once
 - Target length: {{MIN_SUMMARY_WORDS}} words minimum
 
 Length guidance: {{LENGTH_GUIDANCE}}
@@ -1369,16 +1371,14 @@ summarize_video() {
   # Update session statistics before generating the final markdown output
   update_video_stats "$input_words" "$output_words" "$source_video_duration_s"
 
-  # Stop the per-video timer before the document is rendered so the embedded
-  # --include-stats block shows this video's completed processing time
-  # (delivery is excluded; audio generation has its own TTS timer and still
-  # appears in the Telegram message sent after delivery).
-  declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
-
   local output
   output=$(format_output "$title" "$final_summary" "$key_points")
 
   handle_output "$title" "$output"
+
+  # Stop the per-video timer after all output is delivered (text, email, audio).
+  # This makes "Total time" = end-to-end wall-clock per video.
+  declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
 
   if [[ "$SEND_TELEGRAM" == "true" ]]; then
     local esc_title
