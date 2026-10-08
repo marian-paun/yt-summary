@@ -109,11 +109,11 @@ Summarize this transcript chunk into a fluent narative.
 Guidelines:
 - Focus on key facts, decisions, and takeaways, but include sufficient detail for a clear understanding of the summarized ideas
 - Preserve technical terms and proper nouns exactly
-- Write in third person
 - Maintain the tone of the summarized text
 - Omit filler words, tangents, and redundant information
 - Omit promotional inserts, advertising, requests for money support, etc
 - Do not repeat yourself
+- You answer to Who, What, When, Where, Why and How to find the most important facts
 Language: {{LANG}}
 
 Transcript: {{CHUNK_TEXT}}
@@ -156,6 +156,7 @@ Each key point should:
 - Be specific and concrete (include numbers, names, dates when available)
 - Stand alone without requiring context
 - Not repeat information from another bullet
+- You answer to Who, What, When, Where, Why and How to find the most important facts
 
 Format: One bullet per line, starting with "- "
 
