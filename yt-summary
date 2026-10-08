@@ -130,6 +130,7 @@ Combine these chunk summaries into one flowing narrative.
 Rules:
 - Maintain chronological order
 - Deduplicate overlapping information
+- Adjacent chunks share context at boundaries (the end of chunk N overlaps with the start of chunk N+1); treat overlapping content as a single continuous narrative
 - Resolve contradictions by preferring later chunks
 - Create smooth transitions between topics
 - Preserve all unique facts, numbers, and names
@@ -205,6 +206,7 @@ escape_repl() {
 : "${OLLAMA_MODEL:=gemma2:2b}"
 : "${OLLAMA_NUM_CTX:=24000}"
 : "${CHUNK_WORDS:=900}"
+: "${CHUNK_OVERLAP_PERCENT:=3}"      # 2-5% overlap between chunks (default: 3%)
 : "${AUTO_CHUNK:=true}"              # Ask the LLM for a recommended chunk size before summarizing
 : "${MAX_TOKENS:=100000}"
 : "${TEMPERATURE:=0.1}"
@@ -286,6 +288,25 @@ else
 fi
 : "${CACHE_DIR:=/tmp/yt-summary-cache}"
 trap cleanup_temp EXIT
+
+validate_overlap_percent() {
+  local val="$1"
+  if ! [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    log_error "CHUNK_OVERLAP_PERCENT must be a number (got: $val)"
+    return 1
+  fi
+  if (( $(echo "$val < 2" | bc -l) )); then
+    log_warn "CHUNK_OVERLAP_PERCENT=$val is below 2%, clamping to 2%"
+    CHUNK_OVERLAP_PERCENT=2
+  elif (( $(echo "$val > 5" | bc -l) )); then
+    log_warn "CHUNK_OVERLAP_PERCENT=$val exceeds 5%, clamping to 5%"
+    CHUNK_OVERLAP_PERCENT=5
+  fi
+  return 0
+}
+
+# Validate initial value from env/.env
+validate_overlap_percent "$CHUNK_OVERLAP_PERCENT" || exit 1
 
 FORCE=false
 INCLUDE_SUMMARY=true
@@ -374,7 +395,7 @@ parse_args() {
   # Collect arguments, separate options from positional
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -m|--model|--host|--num-ctx|--url|--proxy|--api-key|--key|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|--litellm-proxy|--litellm-model|--litellm-key|--omniroute|--omniroute-model|--omniroute-key|-l|--language|--backend|--whisper-host|--whisper-model|--whisper-ssh-user|--whisper-ssh-auth|--whisper-ssh-key|--whisper-ssh-password|--whisper-transfer|--whisper-remote-dir|--whisper-shared-dir)
+      -m|--model|--host|--num-ctx|--url|--proxy|--api-key|--key|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|--litellm-proxy|--litellm-model|--litellm-key|--omniroute|--omniroute-model|--omniroute-key|-l|--language|--backend|--whisper-host|--whisper-model|--whisper-ssh-user|--whisper-ssh-auth|--whisper-ssh-key|--whisper-ssh-password|--whisper-transfer|--whisper-remote-dir|--whisper-shared-dir|--overlap-percent)
         if [[ $# -lt 2 || -z "${2:-}" || "$2" == -* ]]; then
           usage_error "option '$1' requires a value"
           exit 1
@@ -455,6 +476,11 @@ parse_args() {
       --chunk-words)
           CHUNK_WORDS="${2:-900}"
           AUTO_CHUNK=false          # An explicit CLI chunk size overrides the auto recommendation
+          shift 2
+          ;;
+      --overlap-percent)
+          CHUNK_OVERLAP_PERCENT="${2:-3}"
+          validate_overlap_percent "$CHUNK_OVERLAP_PERCENT" || exit 1
           shift 2
           ;;
       --max-tokens)
@@ -1057,55 +1083,168 @@ split_transcript() {
   local transcript_file="$1"
   local target_chunk_words="$2"
   local video_id="$3"
+  local overlap_percent="${4:-0}"
 
   local chunks_dir="${TMP_BASE}/chunks_${video_id}_$$"
   mkdir -p "$chunks_dir"
 
-  log_debug "Splitting transcript file: $transcript_file (target: $target_chunk_words words per chunk)"
+  log_debug "Splitting transcript file: $transcript_file (target: $target_chunk_words words per chunk, overlap: $overlap_percent%)"
 
-  # Use awk for efficient word-based chunk splitting
-  # awk script: splits text into chunks of target_chunk_words words
+  # Use awk for efficient word-based chunk splitting with sentence-boundary overlap
+  # awk script: splits text into chunks of target_chunk_words words with overlap
   # Outputs chunk files and prints the chunks_dir at the end
-  awk -v target="$target_chunk_words" -v dir="$chunks_dir" -v video="$video_id" '
+  awk -v target="$target_chunk_words" -v dir="$chunks_dir" -v video="$video_id" -v overlap_pct="$overlap_percent" '
     BEGIN {
       chunk_num = 0
       current_words = 0
+      overlap_words = int(target * overlap_pct / 100)
+      if (overlap_words >= target) overlap_words = target - 1
+      if (overlap_words < 0) overlap_words = 0
       chunk_file = dir "/chunk_" chunk_num ".txt"
       write_chunk_header(chunk_file)
-      }
-      {
-      # Split line into words
-      n = split($0, words, /[[:space:]]+/)
+      # Rolling buffer for words (circular buffer of max 10000 words)
+      max_buffer = 10000
+      for (i = 0; i < max_buffer; i++) word_buf[i] = ""
+      word_count = 0
+      # Track sentence end positions in buffer
+      for (i = 0; i < max_buffer; i++) sent_end[i] = 0
+    }
+    {
+      line = $0
+      n = split(line, words, /[[:space:]]+/)
       for (i = 1; i <= n; i++) {
         word = words[i]
-        if (word ~ /^[[:space:]]*$/) continue  # skip empty
+        if (word ~ /^[[:space:]]*$/) continue
 
-          if (current_words > 0 && current_words >= target) {
-            # Start new chunk
-            chunk_num++
-            chunk_file = dir "/chunk_" chunk_num ".txt"
-            write_chunk_header(chunk_file)
+        # Store word in circular buffer
+        idx = word_count % max_buffer
+        word_buf[idx] = word
+
+        # Check if word ends a sentence
+        is_sentence_end = (word ~ /[.!?][[:space:]]*$/ || word ~ /[.!?]$/)
+        if (is_sentence_end) {
+          sent_end[idx] = 1
+        } else {
+          sent_end[idx] = 0
+        }
+        word_count++
+
+        # Write word to current chunk
+        if (current_words == 0) {
+          printf "%s", word > chunk_file
+        } else {
+          printf " %s", word > chunk_file
+        }
+        current_words++
+
+        # Check if we need to start a new chunk
+        if (current_words >= target && overlap_words > 0) {
+          # Extract overlap: scan backward from current position to find sentences
+          overlap_text = build_overlap_text(overlap_words)
+          # Close current chunk
+          close(chunk_file)
+          # Start new chunk
+          chunk_num++
+          chunk_file = dir "/chunk_" chunk_num ".txt"
+          write_chunk_header(chunk_file)
+          # Prepend overlap text to new chunk
+          if (overlap_text != "") {
+            printf "%s", overlap_text > chunk_file
+            current_words = count_words_in_text(overlap_text)
+          } else {
             current_words = 0
           }
-
-          # Write word to chunk file (without trailing newline, space-separated)
-          if (current_words == 0) {
-            printf "%s", word > chunk_file
-          } else {
-            printf " %s", word > chunk_file
-          }
-          current_words++
+        }
       }
     }
     END {
-      # Print chunks directory for later use
       print dir
     }
 
-  function write_chunk_header(file, tmp) {
-    # Truncate/create the file
-    close(file)
-    print > file
+    function build_overlap_text(max_words,  words_collected, result, start_idx, i, j, sent_count, word_idx) {
+      result = ""
+      words_collected = 0
+      sent_count = 0
+
+      # Start from most recent word and go backwards
+      # We want to find complete sentences, so we scan back to find sentence ends
+      start_idx = (word_count - 1) % max_buffer
+
+      # First, find the last sentence end going backwards
+      i = start_idx
+      for (j = 0; j < max_buffer && words_collected < max_words * 2; j++) {
+        if (sent_end[i] == 1) {
+          # Found a sentence end, now collect forward from after this sentence
+          # Actually, we want the sentences BEFORE this position
+          break
+        }
+        i = (i - 1 + max_buffer) % max_buffer
+      }
+
+      # Now collect sentences going forward from the sentence after the one we found
+      # This is complex in awk - simpler approach: collect words backward until we have
+      # enough words AND we are at a sentence boundary
+
+      # Simpler: collect words backward up to max_words, then trim to last sentence boundary
+      temp_words[0] = ""
+      temp_count = 0
+      i = start_idx
+      for (j = 0; j < max_buffer && temp_count < max_words; j++) {
+        if (word_buf[i] != "") {
+          temp_count++
+          temp_words[temp_count] = word_buf[i]
+        }
+        i = (i - 1 + max_buffer) % max_buffer
+      }
+
+      # Now temp_words has words in reverse order (newest first)
+      # Rebuild in correct order and find last sentence boundary
+      result = ""
+      words_collected = 0
+      last_sent_pos = 0
+
+      for (k = temp_count; k >= 1; k--) {
+        w = temp_words[k]
+        if (words_collected == 0) {
+          result = w
+        } else {
+          result = result " " w
+        }
+        words_collected++
+        # Check if this word ends a sentence
+        if (w ~ /[.!?][[:space:]]*$/ || w ~ /[.!?]$/) {
+          last_sent_pos = words_collected
+        }
+      }
+
+      # If we found a sentence boundary, trim to that point
+      if (last_sent_pos > 0 && last_sent_pos < words_collected) {
+        # Rebuild up to last sentence
+        result = ""
+        words_collected = 0
+        for (k = temp_count; k >= 1; k--) {
+          w = temp_words[k]
+          if (words_collected == 0) {
+            result = w
+          } else {
+            result = result " " w
+          }
+          words_collected++
+          if (words_collected == last_sent_pos) break
+        }
+      }
+
+      return result
+    }
+
+    function count_words_in_text(str,  n, tmp) {
+      n = split(str, tmp, /[[:space:]]+/)
+      return n
+    }
+
+    function write_chunk_header(file, tmp) {
+      close(file)
+      printf "" > file
     }
   ' "$transcript_file"
 
@@ -1285,9 +1424,9 @@ summarize_video() {
     fi
   fi
 
-  log_info "Splitting transcript into chunks (target ${effective_chunk_words} words per chunk)..."
+  log_info "Splitting transcript into chunks (target ${effective_chunk_words} words per chunk, overlap: ${CHUNK_OVERLAP_PERCENT}%)..."
   local chunks_dir
-  chunks_dir=$(split_transcript "$transcript_file" "$effective_chunk_words" "$video_id")
+  chunks_dir=$(split_transcript "$transcript_file" "$effective_chunk_words" "$video_id" "$CHUNK_OVERLAP_PERCENT")
 
   local chunk_count
   chunk_count=$(ls -1 "${chunks_dir}"/chunk_*.txt 2>/dev/null | wc -l)
