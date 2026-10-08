@@ -1353,11 +1353,11 @@ summarize_video() {
     cache_checksum=$(md5sum "$(cache_get_path "$video_id")" 2>/dev/null | awk '{print $1}')
     local cached
     if cache_read_with_checksum "$video_id" "$cache_checksum" cached; then
-      handle_output "$title" "$cached"
+      handle_output "$title" "$cached" "$url"
     else
       # Fallback: read cache even if checksum doesn't match (for old caches)
       cached=$(cache_read "$video_id")
-      handle_output "$title" "$cached"
+      handle_output "$title" "$cached" "$url"
     fi
       declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
       return
@@ -1510,7 +1510,7 @@ summarize_video() {
   local output
   output=$(format_output "$title" "$final_summary" "$key_points")
 
-  handle_output "$title" "$output"
+  handle_output "$title" "$output" "$url"
 
   # Stop the per-video timer after all output is delivered (text, email, audio).
   # This makes "Total time" = end-to-end wall-clock per video.
@@ -1582,9 +1582,96 @@ ${stats_md}"
   echo "$output"
 }
 
+fetch_thumbnail() {
+  local url="$1"
+  local output_dir="${2:-$TMP_BASE}"
+  local video_id
+  video_id=$(extract_video_id "$url")
+
+  local thumbnail_file="${output_dir}/${video_id}.jpg"
+  local ytdlp_args=("--write-thumbnail" "--convert-thumbnails" "jpg" "--skip-download" "--no-warnings" "-o" "${output_dir}/%(id)s.%(ext)s")
+
+  if [[ -n "${YTDLP_COOKIES:-}" ]]; then
+    ytdlp_args+=("--cookies" "${YTDLP_COOKIES}")
+  fi
+
+  # yt-dlp reports progress on stdout too; capture everything to a log so it
+  # cannot pollute the thumbnail path this function echoes on success.
+  local ytdlp_log="${output_dir}/ytdlp_thumbnail_$$.log"
+  if yt-dlp "${ytdlp_args[@]}" "$url" >"$ytdlp_log" 2>&1; then
+    if [[ -f "$thumbnail_file" ]]; then
+      rm -f "$ytdlp_log"
+      echo "$thumbnail_file"
+      return 0
+    fi
+    # Sometimes the extension differs (webp, png)
+    for ext in webp png; do
+      local f="${output_dir}/${video_id}.${ext}"
+      if [[ -f "$f" ]]; then
+        rm -f "$ytdlp_log"
+        echo "$f"
+        return 0
+      fi
+    done
+  else
+    log_warn "Thumbnail fetch failed: $(tail -3 "$ytdlp_log" 2>/dev/null | tr '\n' ' ')"
+  fi
+
+  rm -f "$ytdlp_log"
+  return 1
+}
+
+embed_thumbnail_in_audio() {
+  local audio_file="$1"
+  local thumbnail_file="$2"
+  local format="${3:-${AUDIO_FORMAT:-mp3}}"
+
+  if [[ ! -f "$audio_file" ]]; then
+    log_warn "Audio file not found for thumbnail embedding: $audio_file"
+    return 1
+  fi
+
+  if [[ ! -f "$thumbnail_file" ]]; then
+    log_warn "Thumbnail file not found: $thumbnail_file"
+    return 1
+  fi
+
+  # Temp name keeps the real extension so ffmpeg can infer the container.
+  local temp_audio="${audio_file}.tmp.${format}"
+  local ffmpeg_log="${TMP_BASE}/ffmpeg_embed_$$.log"
+
+  case "$format" in
+    mp3)
+      if ffmpeg -y -i "$audio_file" -i "$thumbnail_file" -map 0:a -map 1:v -c:a copy -c:v mjpeg -id3v2_version 3 -metadata:s:v title="Album cover" -metadata:s:v comment="Cover (front)" "$temp_audio" >"$ffmpeg_log" 2>&1; then
+        mv "$temp_audio" "$audio_file"
+        log_info "Thumbnail embedded in MP3: $audio_file"
+        rm -f "$ffmpeg_log"
+        return 0
+      fi
+      ;;
+    m4a)
+      if ffmpeg -y -i "$audio_file" -i "$thumbnail_file" -map 0:a -map 1:v -c:a copy -c:v mjpeg -disposition:v:0 attached_pic "$temp_audio" >"$ffmpeg_log" 2>&1; then
+        mv "$temp_audio" "$audio_file"
+        log_info "Thumbnail embedded in M4A: $audio_file"
+        rm -f "$ffmpeg_log"
+        return 0
+      fi
+      ;;
+    *)
+      log_warn "Unsupported format for thumbnail embedding: $format"
+      return 1
+      ;;
+  esac
+
+  log_warn "Failed to embed thumbnail in audio file: $(tail -5 "$ffmpeg_log" 2>/dev/null | tr '\n' ' ')"
+  rm -f "$temp_audio" "$ffmpeg_log"
+  return 1
+}
+
 handle_output() {
   local title="$1"
   local output="$2"
+  local video_url="${3:-${TARGET:-}}"
 
   if [[ "$PRINT_OUTPUT" == "true" && "$GENERATE_AUDIO" != "true" ]]; then
     echo ""
@@ -1616,11 +1703,14 @@ handle_output() {
     fi
 
     local output_path
+    # Filename-safe title: runs of non-alphanumeric characters become a
+    # single space, so "A populist landslide!" -> "A populist landslide".
+    # LC_ALL applies to sed (the character-class user), not printf.
+    local safe_title
+    safe_title=$(printf '%s' "$title" | LC_ALL=C.UTF-8 sed 's/[^[:alnum:]]\+/ /g; s/^ //; s/ $//' | head -c 50 | sed 's/ $//')
     if [[ -n "$AUDIO_OUTPUT" ]]; then
       if [[ -d "$AUDIO_OUTPUT" ]]; then
-        local safe_title
-        safe_title=$(LC_ALL=C.UTF-8 echo "$title" | sed 's/[^[:alnum:] _-]/_/g' | sed 's/[ _-]\+/_/g' | sed 's/^_//' | sed 's/_$//' | head -c 50)
-        if [[ -n "$safe_title" ]] && [[ "$safe_title" != "Unknown_Video" ]]; then
+        if [[ -n "$safe_title" ]] && [[ "$safe_title" != "Unknown Video" ]] && [[ "$safe_title" != "Unknown_Video" ]]; then
           output_path="${AUDIO_OUTPUT%/}/${safe_title}.${AUDIO_FORMAT}"
         else
           output_path="${AUDIO_OUTPUT%/}/$(date +%Y%m%d_%H%M%S).${AUDIO_FORMAT}"
@@ -1629,9 +1719,7 @@ handle_output() {
         output_path="$AUDIO_OUTPUT"
       fi
     else
-      local safe_title
-      safe_title=$(LC_ALL=C.UTF-8 echo "$title" | sed 's/[^[:alnum:] _-]/_/g' | sed 's/[ _-]\+/_/g' | sed 's/^_//' | sed 's/_$//' | head -c 50)
-      if [[ -n "$safe_title" ]] && [[ "$safe_title" != "Unknown_Video" ]]; then
+      if [[ -n "$safe_title" ]] && [[ "$safe_title" != "Unknown Video" ]] && [[ "$safe_title" != "Unknown_Video" ]]; then
         output_path="./${safe_title}.${AUDIO_FORMAT}"
       else
         output_path="./$(date +%Y%m%d_%H%M%S).${AUDIO_FORMAT}"
@@ -1644,6 +1732,18 @@ handle_output() {
     tts_text=$(phoneticize_for_tts "$tts_text" "$TARGET_LANGUAGE")
     generate_audio "$tts_text" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"
     declare -f stats_toc >/dev/null 2>&1 && stats_toc "tts" || true
+
+    # Embed the video thumbnail in the audio file when one is available.
+    # A failed embed must not abort the run (set -e).
+    if [[ -f "$output_path" ]]; then
+      local thumbnail_file
+      if thumbnail_file=$(fetch_thumbnail "$video_url"); then
+        embed_thumbnail_in_audio "$output_path" "$thumbnail_file" "$AUDIO_FORMAT" || true
+        rm -f "$thumbnail_file"
+      else
+        log_warn "No thumbnail available for embedding"
+      fi
+    fi
 
     # Measure audio summary duration for efficiency metrics
     if [[ -f "$output_path" ]] && command -v ffprobe >/dev/null 2>&1; then
