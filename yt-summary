@@ -109,11 +109,11 @@ Summarize this transcript chunk into a fluent narative.
 Guidelines:
 - Focus on key facts, decisions, and takeaways, but include sufficient detail for a clear understanding of the summarized ideas
 - Preserve technical terms and proper nouns exactly
-- Write in third person
 - Maintain the tone of the summarized text
 - Omit filler words, tangents, and redundant information
 - Omit promotional inserts, advertising, requests for money support, etc
 - Do not repeat yourself
+- You answer to Who, What, When, Where, Why and How to find the most important facts
 Language: {{LANG}}
 
 Transcript: {{CHUNK_TEXT}}
@@ -130,6 +130,7 @@ Combine these chunk summaries into one flowing narrative.
 Rules:
 - Maintain chronological order
 - Deduplicate overlapping information
+- Adjacent chunks share context at boundaries (the end of chunk N overlaps with the start of chunk N+1); treat overlapping content as a single continuous narrative
 - Resolve contradictions by preferring later chunks
 - Create smooth transitions between topics
 - Preserve all unique facts, numbers, and names
@@ -156,6 +157,7 @@ Each key point should:
 - Be specific and concrete (include numbers, names, dates when available)
 - Stand alone without requiring context
 - Not repeat information from another bullet
+- You answer to Who, What, When, Where, Why and How to find the most important facts
 
 Format: One bullet per line, starting with "- "
 
@@ -204,6 +206,7 @@ escape_repl() {
 : "${OLLAMA_MODEL:=gemma2:2b}"
 : "${OLLAMA_NUM_CTX:=24000}"
 : "${CHUNK_WORDS:=900}"
+: "${CHUNK_OVERLAP_PERCENT:=3}"      # 2-5% overlap between chunks (default: 3%)
 : "${AUTO_CHUNK:=true}"              # Ask the LLM for a recommended chunk size before summarizing
 : "${MAX_TOKENS:=100000}"
 : "${TEMPERATURE:=0.1}"
@@ -285,6 +288,25 @@ else
 fi
 : "${CACHE_DIR:=/tmp/yt-summary-cache}"
 trap cleanup_temp EXIT
+
+validate_overlap_percent() {
+  local val="$1"
+  if ! [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    log_error "CHUNK_OVERLAP_PERCENT must be a number (got: $val)"
+    return 1
+  fi
+  if (( $(echo "$val < 2" | bc -l) )); then
+    log_warn "CHUNK_OVERLAP_PERCENT=$val is below 2%, clamping to 2%"
+    CHUNK_OVERLAP_PERCENT=2
+  elif (( $(echo "$val > 5" | bc -l) )); then
+    log_warn "CHUNK_OVERLAP_PERCENT=$val exceeds 5%, clamping to 5%"
+    CHUNK_OVERLAP_PERCENT=5
+  fi
+  return 0
+}
+
+# Validate initial value from env/.env
+validate_overlap_percent "$CHUNK_OVERLAP_PERCENT" || exit 1
 
 FORCE=false
 INCLUDE_SUMMARY=true
@@ -373,7 +395,7 @@ parse_args() {
   # Collect arguments, separate options from positional
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -m|--model|--host|--num-ctx|--url|--proxy|--api-key|--key|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|--litellm-proxy|--litellm-model|--litellm-key|--omniroute|--omniroute-model|--omniroute-key|-l|--language|--backend|--whisper-host|--whisper-model|--whisper-ssh-user|--whisper-ssh-auth|--whisper-ssh-key|--whisper-ssh-password|--whisper-transfer|--whisper-remote-dir|--whisper-shared-dir)
+      -m|--model|--host|--num-ctx|--url|--proxy|--api-key|--key|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|--litellm-proxy|--litellm-model|--litellm-key|--omniroute|--omniroute-model|--omniroute-key|-l|--language|--backend|--whisper-host|--whisper-model|--whisper-ssh-user|--whisper-ssh-auth|--whisper-ssh-key|--whisper-ssh-password|--whisper-transfer|--whisper-remote-dir|--whisper-shared-dir|--overlap-percent)
         if [[ $# -lt 2 || -z "${2:-}" || "$2" == -* ]]; then
           usage_error "option '$1' requires a value"
           exit 1
@@ -454,6 +476,11 @@ parse_args() {
       --chunk-words)
           CHUNK_WORDS="${2:-900}"
           AUTO_CHUNK=false          # An explicit CLI chunk size overrides the auto recommendation
+          shift 2
+          ;;
+      --overlap-percent)
+          CHUNK_OVERLAP_PERCENT="${2:-3}"
+          validate_overlap_percent "$CHUNK_OVERLAP_PERCENT" || exit 1
           shift 2
           ;;
       --max-tokens)
@@ -1056,55 +1083,168 @@ split_transcript() {
   local transcript_file="$1"
   local target_chunk_words="$2"
   local video_id="$3"
+  local overlap_percent="${4:-0}"
 
   local chunks_dir="${TMP_BASE}/chunks_${video_id}_$$"
   mkdir -p "$chunks_dir"
 
-  log_debug "Splitting transcript file: $transcript_file (target: $target_chunk_words words per chunk)"
+  log_debug "Splitting transcript file: $transcript_file (target: $target_chunk_words words per chunk, overlap: $overlap_percent%)"
 
-  # Use awk for efficient word-based chunk splitting
-  # awk script: splits text into chunks of target_chunk_words words
+  # Use awk for efficient word-based chunk splitting with sentence-boundary overlap
+  # awk script: splits text into chunks of target_chunk_words words with overlap
   # Outputs chunk files and prints the chunks_dir at the end
-  awk -v target="$target_chunk_words" -v dir="$chunks_dir" -v video="$video_id" '
+  awk -v target="$target_chunk_words" -v dir="$chunks_dir" -v video="$video_id" -v overlap_pct="$overlap_percent" '
     BEGIN {
       chunk_num = 0
       current_words = 0
+      overlap_words = int(target * overlap_pct / 100)
+      if (overlap_words >= target) overlap_words = target - 1
+      if (overlap_words < 0) overlap_words = 0
       chunk_file = dir "/chunk_" chunk_num ".txt"
       write_chunk_header(chunk_file)
-      }
-      {
-      # Split line into words
-      n = split($0, words, /[[:space:]]+/)
+      # Rolling buffer for words (circular buffer of max 10000 words)
+      max_buffer = 10000
+      for (i = 0; i < max_buffer; i++) word_buf[i] = ""
+      word_count = 0
+      # Track sentence end positions in buffer
+      for (i = 0; i < max_buffer; i++) sent_end[i] = 0
+    }
+    {
+      line = $0
+      n = split(line, words, /[[:space:]]+/)
       for (i = 1; i <= n; i++) {
         word = words[i]
-        if (word ~ /^[[:space:]]*$/) continue  # skip empty
+        if (word ~ /^[[:space:]]*$/) continue
 
-          if (current_words > 0 && current_words >= target) {
-            # Start new chunk
-            chunk_num++
-            chunk_file = dir "/chunk_" chunk_num ".txt"
-            write_chunk_header(chunk_file)
+        # Store word in circular buffer
+        idx = word_count % max_buffer
+        word_buf[idx] = word
+
+        # Check if word ends a sentence
+        is_sentence_end = (word ~ /[.!?][[:space:]]*$/ || word ~ /[.!?]$/)
+        if (is_sentence_end) {
+          sent_end[idx] = 1
+        } else {
+          sent_end[idx] = 0
+        }
+        word_count++
+
+        # Write word to current chunk
+        if (current_words == 0) {
+          printf "%s", word > chunk_file
+        } else {
+          printf " %s", word > chunk_file
+        }
+        current_words++
+
+        # Check if we need to start a new chunk
+        if (current_words >= target && overlap_words > 0) {
+          # Extract overlap: scan backward from current position to find sentences
+          overlap_text = build_overlap_text(overlap_words)
+          # Close current chunk
+          close(chunk_file)
+          # Start new chunk
+          chunk_num++
+          chunk_file = dir "/chunk_" chunk_num ".txt"
+          write_chunk_header(chunk_file)
+          # Prepend overlap text to new chunk
+          if (overlap_text != "") {
+            printf "%s", overlap_text > chunk_file
+            current_words = count_words_in_text(overlap_text)
+          } else {
             current_words = 0
           }
-
-          # Write word to chunk file (without trailing newline, space-separated)
-          if (current_words == 0) {
-            printf "%s", word > chunk_file
-          } else {
-            printf " %s", word > chunk_file
-          }
-          current_words++
+        }
       }
     }
     END {
-      # Print chunks directory for later use
       print dir
     }
 
-  function write_chunk_header(file, tmp) {
-    # Truncate/create the file
-    close(file)
-    print > file
+    function build_overlap_text(max_words,  words_collected, result, start_idx, i, j, sent_count, word_idx) {
+      result = ""
+      words_collected = 0
+      sent_count = 0
+
+      # Start from most recent word and go backwards
+      # We want to find complete sentences, so we scan back to find sentence ends
+      start_idx = (word_count - 1) % max_buffer
+
+      # First, find the last sentence end going backwards
+      i = start_idx
+      for (j = 0; j < max_buffer && words_collected < max_words * 2; j++) {
+        if (sent_end[i] == 1) {
+          # Found a sentence end, now collect forward from after this sentence
+          # Actually, we want the sentences BEFORE this position
+          break
+        }
+        i = (i - 1 + max_buffer) % max_buffer
+      }
+
+      # Now collect sentences going forward from the sentence after the one we found
+      # This is complex in awk - simpler approach: collect words backward until we have
+      # enough words AND we are at a sentence boundary
+
+      # Simpler: collect words backward up to max_words, then trim to last sentence boundary
+      temp_words[0] = ""
+      temp_count = 0
+      i = start_idx
+      for (j = 0; j < max_buffer && temp_count < max_words; j++) {
+        if (word_buf[i] != "") {
+          temp_count++
+          temp_words[temp_count] = word_buf[i]
+        }
+        i = (i - 1 + max_buffer) % max_buffer
+      }
+
+      # Now temp_words has words in reverse order (newest first)
+      # Rebuild in correct order and find last sentence boundary
+      result = ""
+      words_collected = 0
+      last_sent_pos = 0
+
+      for (k = temp_count; k >= 1; k--) {
+        w = temp_words[k]
+        if (words_collected == 0) {
+          result = w
+        } else {
+          result = result " " w
+        }
+        words_collected++
+        # Check if this word ends a sentence
+        if (w ~ /[.!?][[:space:]]*$/ || w ~ /[.!?]$/) {
+          last_sent_pos = words_collected
+        }
+      }
+
+      # If we found a sentence boundary, trim to that point
+      if (last_sent_pos > 0 && last_sent_pos < words_collected) {
+        # Rebuild up to last sentence
+        result = ""
+        words_collected = 0
+        for (k = temp_count; k >= 1; k--) {
+          w = temp_words[k]
+          if (words_collected == 0) {
+            result = w
+          } else {
+            result = result " " w
+          }
+          words_collected++
+          if (words_collected == last_sent_pos) break
+        }
+      }
+
+      return result
+    }
+
+    function count_words_in_text(str,  n, tmp) {
+      n = split(str, tmp, /[[:space:]]+/)
+      return n
+    }
+
+    function write_chunk_header(file, tmp) {
+      close(file)
+      printf "" > file
     }
   ' "$transcript_file"
 
@@ -1213,11 +1353,11 @@ summarize_video() {
     cache_checksum=$(md5sum "$(cache_get_path "$video_id")" 2>/dev/null | awk '{print $1}')
     local cached
     if cache_read_with_checksum "$video_id" "$cache_checksum" cached; then
-      handle_output "$title" "$cached"
+      handle_output "$title" "$cached" "$url"
     else
       # Fallback: read cache even if checksum doesn't match (for old caches)
       cached=$(cache_read "$video_id")
-      handle_output "$title" "$cached"
+      handle_output "$title" "$cached" "$url"
     fi
       declare -f stats_toc >/dev/null 2>&1 && stats_toc "processing" || true
       return
@@ -1284,9 +1424,9 @@ summarize_video() {
     fi
   fi
 
-  log_info "Splitting transcript into chunks (target ${effective_chunk_words} words per chunk)..."
+  log_info "Splitting transcript into chunks (target ${effective_chunk_words} words per chunk, overlap: ${CHUNK_OVERLAP_PERCENT}%)..."
   local chunks_dir
-  chunks_dir=$(split_transcript "$transcript_file" "$effective_chunk_words" "$video_id")
+  chunks_dir=$(split_transcript "$transcript_file" "$effective_chunk_words" "$video_id" "$CHUNK_OVERLAP_PERCENT")
 
   local chunk_count
   chunk_count=$(ls -1 "${chunks_dir}"/chunk_*.txt 2>/dev/null | wc -l)
@@ -1370,7 +1510,7 @@ summarize_video() {
   local output
   output=$(format_output "$title" "$final_summary" "$key_points")
 
-  handle_output "$title" "$output"
+  handle_output "$title" "$output" "$url"
 
   # Stop the per-video timer after all output is delivered (text, email, audio).
   # This makes "Total time" = end-to-end wall-clock per video.
@@ -1442,9 +1582,96 @@ ${stats_md}"
   echo "$output"
 }
 
+fetch_thumbnail() {
+  local url="$1"
+  local output_dir="${2:-$TMP_BASE}"
+  local video_id
+  video_id=$(extract_video_id "$url")
+
+  local thumbnail_file="${output_dir}/${video_id}.jpg"
+  local ytdlp_args=("--write-thumbnail" "--convert-thumbnails" "jpg" "--skip-download" "--no-warnings" "-o" "${output_dir}/%(id)s.%(ext)s")
+
+  if [[ -n "${YTDLP_COOKIES:-}" ]]; then
+    ytdlp_args+=("--cookies" "${YTDLP_COOKIES}")
+  fi
+
+  # yt-dlp reports progress on stdout too; capture everything to a log so it
+  # cannot pollute the thumbnail path this function echoes on success.
+  local ytdlp_log="${output_dir}/ytdlp_thumbnail_$$.log"
+  if yt-dlp "${ytdlp_args[@]}" "$url" >"$ytdlp_log" 2>&1; then
+    if [[ -f "$thumbnail_file" ]]; then
+      rm -f "$ytdlp_log"
+      echo "$thumbnail_file"
+      return 0
+    fi
+    # Sometimes the extension differs (webp, png)
+    for ext in webp png; do
+      local f="${output_dir}/${video_id}.${ext}"
+      if [[ -f "$f" ]]; then
+        rm -f "$ytdlp_log"
+        echo "$f"
+        return 0
+      fi
+    done
+  else
+    log_warn "Thumbnail fetch failed: $(tail -3 "$ytdlp_log" 2>/dev/null | tr '\n' ' ')"
+  fi
+
+  rm -f "$ytdlp_log"
+  return 1
+}
+
+embed_thumbnail_in_audio() {
+  local audio_file="$1"
+  local thumbnail_file="$2"
+  local format="${3:-${AUDIO_FORMAT:-mp3}}"
+
+  if [[ ! -f "$audio_file" ]]; then
+    log_warn "Audio file not found for thumbnail embedding: $audio_file"
+    return 1
+  fi
+
+  if [[ ! -f "$thumbnail_file" ]]; then
+    log_warn "Thumbnail file not found: $thumbnail_file"
+    return 1
+  fi
+
+  # Temp name keeps the real extension so ffmpeg can infer the container.
+  local temp_audio="${audio_file}.tmp.${format}"
+  local ffmpeg_log="${TMP_BASE}/ffmpeg_embed_$$.log"
+
+  case "$format" in
+    mp3)
+      if ffmpeg -y -i "$audio_file" -i "$thumbnail_file" -map 0:a -map 1:v -c:a copy -c:v mjpeg -id3v2_version 3 -metadata:s:v title="Album cover" -metadata:s:v comment="Cover (front)" "$temp_audio" >"$ffmpeg_log" 2>&1; then
+        mv "$temp_audio" "$audio_file"
+        log_info "Thumbnail embedded in MP3: $audio_file"
+        rm -f "$ffmpeg_log"
+        return 0
+      fi
+      ;;
+    m4a)
+      if ffmpeg -y -i "$audio_file" -i "$thumbnail_file" -map 0:a -map 1:v -c:a copy -c:v mjpeg -disposition:v:0 attached_pic "$temp_audio" >"$ffmpeg_log" 2>&1; then
+        mv "$temp_audio" "$audio_file"
+        log_info "Thumbnail embedded in M4A: $audio_file"
+        rm -f "$ffmpeg_log"
+        return 0
+      fi
+      ;;
+    *)
+      log_warn "Unsupported format for thumbnail embedding: $format"
+      return 1
+      ;;
+  esac
+
+  log_warn "Failed to embed thumbnail in audio file: $(tail -5 "$ffmpeg_log" 2>/dev/null | tr '\n' ' ')"
+  rm -f "$temp_audio" "$ffmpeg_log"
+  return 1
+}
+
 handle_output() {
   local title="$1"
   local output="$2"
+  local video_url="${3:-${TARGET:-}}"
 
   if [[ "$PRINT_OUTPUT" == "true" && "$GENERATE_AUDIO" != "true" ]]; then
     echo ""
@@ -1476,11 +1703,14 @@ handle_output() {
     fi
 
     local output_path
+    # Filename-safe title: runs of non-alphanumeric characters become a
+    # single space, so "A populist landslide!" -> "A populist landslide".
+    # LC_ALL applies to sed (the character-class user), not printf.
+    local safe_title
+    safe_title=$(printf '%s' "$title" | LC_ALL=C.UTF-8 sed 's/[^[:alnum:]]\+/ /g; s/^ //; s/ $//' | head -c 50 | sed 's/ $//')
     if [[ -n "$AUDIO_OUTPUT" ]]; then
       if [[ -d "$AUDIO_OUTPUT" ]]; then
-        local safe_title
-        safe_title=$(LC_ALL=C.UTF-8 echo "$title" | sed 's/[^[:alnum:] _-]/_/g' | sed 's/[ _-]\+/_/g' | sed 's/^_//' | sed 's/_$//' | head -c 50)
-        if [[ -n "$safe_title" ]] && [[ "$safe_title" != "Unknown_Video" ]]; then
+        if [[ -n "$safe_title" ]] && [[ "$safe_title" != "Unknown Video" ]] && [[ "$safe_title" != "Unknown_Video" ]]; then
           output_path="${AUDIO_OUTPUT%/}/${safe_title}.${AUDIO_FORMAT}"
         else
           output_path="${AUDIO_OUTPUT%/}/$(date +%Y%m%d_%H%M%S).${AUDIO_FORMAT}"
@@ -1489,9 +1719,7 @@ handle_output() {
         output_path="$AUDIO_OUTPUT"
       fi
     else
-      local safe_title
-      safe_title=$(LC_ALL=C.UTF-8 echo "$title" | sed 's/[^[:alnum:] _-]/_/g' | sed 's/[ _-]\+/_/g' | sed 's/^_//' | sed 's/_$//' | head -c 50)
-      if [[ -n "$safe_title" ]] && [[ "$safe_title" != "Unknown_Video" ]]; then
+      if [[ -n "$safe_title" ]] && [[ "$safe_title" != "Unknown Video" ]] && [[ "$safe_title" != "Unknown_Video" ]]; then
         output_path="./${safe_title}.${AUDIO_FORMAT}"
       else
         output_path="./$(date +%Y%m%d_%H%M%S).${AUDIO_FORMAT}"
@@ -1504,6 +1732,18 @@ handle_output() {
     tts_text=$(phoneticize_for_tts "$tts_text" "$TARGET_LANGUAGE")
     generate_audio "$tts_text" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"
     declare -f stats_toc >/dev/null 2>&1 && stats_toc "tts" || true
+
+    # Embed the video thumbnail in the audio file when one is available.
+    # A failed embed must not abort the run (set -e).
+    if [[ -f "$output_path" ]]; then
+      local thumbnail_file
+      if thumbnail_file=$(fetch_thumbnail "$video_url"); then
+        embed_thumbnail_in_audio "$output_path" "$thumbnail_file" "$AUDIO_FORMAT" || true
+        rm -f "$thumbnail_file"
+      else
+        log_warn "No thumbnail available for embedding"
+      fi
+    fi
 
     # Measure audio summary duration for efficiency metrics
     if [[ -f "$output_path" ]] && command -v ffprobe >/dev/null 2>&1; then

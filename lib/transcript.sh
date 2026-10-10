@@ -141,7 +141,27 @@ get_playlist_videos() {
   current_epoch=$(date +%s)
   local count=0
 
-  while IFS='|' read -r url title duration language epoch; do
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+
+    # Parse line handling titles with '|' characters:
+    # Format: url|title|duration|language|epoch
+    # Title may contain '|', so split into array and reconstruct
+    local -a fields
+    IFS='|' read -r -a fields <<< "$line"
+    local field_count=${#fields[@]}
+
+    # Need at least 5 fields: url, title (at least 1), duration, language, epoch
+    [[ $field_count -lt 5 ]] && continue
+
+    local url="${fields[0]}"
+    local epoch="${fields[field_count-1]}"
+    local language="${fields[field_count-2]}"
+    local duration="${fields[field_count-3]}"
+    # Title is everything between url and duration
+    local title
+    title=$(IFS='|'; echo "${fields[*]:1:field_count-4}")
+
     [[ -z "$url" ]] && continue
 
     # Check count limit if set (in case dateafter returned more than needed)
@@ -255,6 +275,15 @@ fetch_transcript_with_fallback() {
 
   TRANSCRIPT_SOURCE=""
   TRANSCRIPT_DETECTED_LANG=""
+
+  # Quick availability check - skip unavailable videos (private, deleted, etc.)
+  # before attempting subtitle downloads or whisper transcription.
+  local availability_check
+  availability_check=$(yt-dlp --no-playlist --skip-download --print "%(id)s" "https://youtube.com/watch?v=${video_id}" 2>&1 || true)
+  if [[ $? -ne 0 ]] || [[ "$availability_check" == *"Video unavailable"* ]] || [[ "$availability_check" == *"Private video"* ]] || [[ "$availability_check" == *"This video has been removed"* ]] || [[ "$availability_check" == *"Video unavailable"* ]]; then
+    log_transcript_error "Video unavailable or private: $video_id - skipping"
+    return 1
+  fi
 
   # Stats step timers (defined in lib/ollama.sh when present).
   _stats_tick() { declare -f stats_tic >/dev/null 2>&1 && { stats_tic "$@"; return 0; }; return 0; }

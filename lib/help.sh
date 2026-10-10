@@ -136,6 +136,7 @@ PLAYLIST OPTIONS:
 SYSTEM & CACHE OPTIONS:
   -f, --force                Force regeneration even if cached
   --no-auto-chunk            Disable the LLM chunk-size recommendation (use CHUNK_WORDS)
+  --overlap-percent PERCENT  Overlap between chunks: 2-5% (default: 3%)
   --cleanup                  Delete temporary files after processing
   -v, --verbose              Enable verbose/debug output
 
@@ -266,6 +267,9 @@ EOF
   env_entry AUTO_CHUNK "$(env_show AUTO_CHUNK)" \
     "false = always use CHUNK_WORDS instead of asking the LLM" \
     "CLI: --no-auto-chunk"
+  env_entry CHUNK_OVERLAP_PERCENT "$(env_show CHUNK_OVERLAP_PERCENT)" \
+    "Overlap percentage between transcript chunks (2-5%)" \
+    "CLI: --overlap-percent PERCENT"
   env_entry CACHE_DIR "$(env_show CACHE_DIR)" \
     "Directory where summaries are cached" "CLI: -f, --force bypasses the cache"
 
@@ -440,6 +444,7 @@ KNOWN_LONG_OPTIONS=(
   --think --testing --ignore-processed --transcript-verbose
   --litellm-proxy --litellm-model --litellm-key
   --omniroute --omniroute-model --omniroute-key
+  --overlap-percent
 )
 
 # suggest_option OPTION -> prints the closest known long option, or nothing.
