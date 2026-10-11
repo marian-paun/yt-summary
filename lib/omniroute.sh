@@ -3,7 +3,6 @@
 
 set -euo pipefail
 
-: "${USE_OMNIROUTE:=false}"
 : "${OMNIROUTE_URL:=http://localhost:20128}"
 : "${OMNIROUTE_MODEL:=}"
 : "${OMNIROUTE_API_KEY:=}"

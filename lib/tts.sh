@@ -14,6 +14,12 @@
 #                fail the same way and hide the real cause.
 EDGE_TTS_FAILURE=""
 
+# Mask credentials in a proxy URL (or free text) for logging.
+#   scheme://user:pass@host:port -> scheme://***@host:port
+mask_proxy_credentials() {
+    printf '%s' "$1" | sed -E 's#(://)[^/@[:space:]]*@#\1***@#g'
+}
+
 # Resolve a TTS binary name or path to an absolute executable path.
 # Accepts a path to an existing file, otherwise looks the name up on PATH.
 resolve_tts_bin() {
@@ -243,7 +249,7 @@ generate_audio_edge_tts() {
     # or the client crashed. All of these are worth retrying locally.
     # A timeout guards against a hung connection (e.g. a dead proxy).
     if ! output=$(timeout "$EDGE_TTS_TIMEOUT" "$edge_tts_bin" "${edge_tts_args[@]}" 2>&1); then
-        log_error "edge-tts failed to generate audio: $output"
+        log_error "edge-tts failed to generate audio: $(mask_proxy_credentials "$output")"
         rm -rf "$temp_dir"
         EDGE_TTS_FAILURE="fallback"
         return 1
@@ -323,53 +329,56 @@ generate_audio() {
                 return 0
             fi
 
-            # 2. If the failure was recoverable (network/service), try the
-            #    configured proxies in sequence. A fatal error (bad voice,
-            #   bad format, local ffmpeg failure) would fail the same way
-            #   through every proxy, so those are skipped.
-            if [[ "$EDGE_TTS_FAILURE" == "fallback" ]]; then
-                local -a proxies_to_try=()
-                if [[ -n "${EDGE_TTS_PROXIES:-}" ]]; then
-                    IFS=',' read -ra proxy_list <<< "$EDGE_TTS_PROXIES"
-                    for p in "${proxy_list[@]}"; do
-                        p="$(echo "$p" | xargs)"
-                        [[ -n "$p" ]] && proxies_to_try+=("$p")
-                    done
-                fi
-                # Individual proxy variables: EDGE_TTS_PROXY1..3, in order.
-                local i var_name proxy_val
-                for i in 1 2 3; do
-                    var_name="EDGE_TTS_PROXY${i}"
-                    proxy_val="${!var_name:-}"
-                    [[ -n "$proxy_val" ]] && proxies_to_try+=("$proxy_val")
-                done
+            # A fatal error (bad voice/format, local ffmpeg failure) would
+            # fail the same way through every proxy and through piper, so
+            # abort now instead of silently degrading to a different voice.
+            if [[ "$EDGE_TTS_FAILURE" != "fallback" ]]; then
+                return 1
+            fi
 
-                # Deduplicate while preserving order.
-                local tried_proxies=() p tp is_dup
-                for p in "${proxies_to_try[@]}"; do
-                    is_dup=false
-                    for tp in "${tried_proxies[@]}"; do
-                        [[ "$tp" == "$p" ]] && { is_dup=true; break; }
-                    done
-                    [[ "$is_dup" == false ]] && tried_proxies+=("$p")
-                done
-
-                if [[ ${#tried_proxies[@]} -gt 0 ]]; then
-                    log_info "Direct edge-tts failed; trying ${#tried_proxies[@]} configured proxy(ies)"
-                fi
-
-                for p in "${tried_proxies[@]}"; do
-                    log_info "Trying edge-tts with proxy: $p"
-                    rm -f "$output_file"  # drop any partial output
-                    EDGE_TTS_FAILURE=""
-                    if generate_audio_edge_tts "$text" "$voice" "$output_file" "$format" "$p"; then
-                        return 0
-                    fi
-                    # A fatal error would fail the same way through later
-                    # proxies, so stop trying them.
-                    [[ "$EDGE_TTS_FAILURE" != "fallback" ]] && break
+            # 2. The failure was recoverable (network/service): try the
+            #    configured proxies in sequence.
+            local -a proxies_to_try=()
+            if [[ -n "${EDGE_TTS_PROXIES:-}" ]]; then
+                IFS=',' read -ra proxy_list <<< "$EDGE_TTS_PROXIES"
+                for p in "${proxy_list[@]}"; do
+                    p="$(echo "$p" | xargs)"
+                    [[ -n "$p" ]] && proxies_to_try+=("$p")
                 done
             fi
+            # Individual proxy variables: EDGE_TTS_PROXY1..3, in order.
+            local i var_name proxy_val
+            for i in 1 2 3; do
+                var_name="EDGE_TTS_PROXY${i}"
+                proxy_val="${!var_name:-}"
+                [[ -n "$proxy_val" ]] && proxies_to_try+=("$proxy_val")
+            done
+
+            # Deduplicate while preserving order.
+            local tried_proxies=() p tp is_dup
+            for p in "${proxies_to_try[@]}"; do
+                is_dup=false
+                for tp in "${tried_proxies[@]}"; do
+                    [[ "$tp" == "$p" ]] && { is_dup=true; break; }
+                done
+                [[ "$is_dup" == false ]] && tried_proxies+=("$p")
+            done
+
+            if [[ ${#tried_proxies[@]} -gt 0 ]]; then
+                log_info "Direct edge-tts failed; trying ${#tried_proxies[@]} configured proxy(ies)"
+            fi
+
+            for p in "${tried_proxies[@]}"; do
+                log_info "Trying edge-tts with proxy: $(mask_proxy_credentials "$p")"
+                rm -f "$output_file"  # drop any partial output
+                EDGE_TTS_FAILURE=""
+                if generate_audio_edge_tts "$text" "$voice" "$output_file" "$format" "$p"; then
+                    return 0
+                fi
+                # A fatal error through a proxy would fail the same way
+                # through piper, so abort instead of degrading.
+                [[ "$EDGE_TTS_FAILURE" != "fallback" ]] && return 1
+            done
 
             # Fall back to piper (default voice for the detected language;
             # the edge-tts voice name has no piper equivalent).

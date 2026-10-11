@@ -153,20 +153,14 @@ usage_advanced() {
 ADVANCED & LEGACY OPTIONS:
   --think                    Enable think/reasoning mode (Ollama, Omniroute, LiteLLM, Fallback)
   --chunk-words WORDS        Target words per chunk (default: ${CHUNK_WORDS}; disables auto chunk size)
-  --auto-chunk               Ask the LLM for the recommended chunk size before summarizing
-                             (default: ${AUTO_CHUNK})
+  --no-auto-chunk            Use the configured CHUNK_WORDS and skip the LLM chunk-size
+                             recommendation (auto chunk size is on by default)
   --max-tokens TOKENS        Max tokens per response (default: ${MAX_TOKENS})
   --temperature TEMP         Temperature for LLM (default: ${TEMPERATURE})
   --max-retries RETRIES      Max retries per LLM call (default: ${MAX_RETRIES})
   --testing                  Testing mode: generate output without caching or stats
   --ignore-processed         Skip videos that have already been processed
   --transcript-verbose       Show transcript fetching details
-  --litellm-proxy URL        [Deprecated] Alias for --backend litellm --url URL
-  --litellm-model MODEL      [Deprecated] Alias for --backend litellm --model MODEL
-  --litellm-key KEY          [Deprecated] Alias for --backend litellm --api-key KEY
-  --omniroute URL            [Deprecated] Alias for --backend omniroute --url URL
-  --omniroute-model MODEL    [Deprecated] Alias for --backend omniroute --model MODEL
-  --omniroute-key KEY        [Deprecated] Alias for --backend omniroute --api-key KEY
 EOF
 }
 
@@ -195,10 +189,6 @@ EOF
   env_entry LLM_API_KEY "$(env_show_secret LLM_API_KEY)" \
     "Unified API key applied to the selected backend (litellm/omniroute)" \
     "CLI: --api-key, --key KEY"
-  env_entry USE_LITELLM "$(env_show USE_LITELLM)" \
-    "[Deprecated] true selects the litellm backend; use LLM_BACKEND instead"
-  env_entry USE_OMNIROUTE "$(env_show USE_OMNIROUTE)" \
-    "[Deprecated] true selects the omniroute backend; use LLM_BACKEND instead"
 
   cat <<EOF
 
@@ -448,11 +438,9 @@ KNOWN_LONG_OPTIONS=(
   --whisper-ssh-auth --whisper-ssh-key --whisper-ssh-password
   --whisper-transfer --whisper-remote-dir --whisper-shared-dir
   --max-playlist-videos --max-playlist-video-age-days
-  --force --no-auto-chunk --auto-chunk --chunk-words --max-tokens
+  --force --no-auto-chunk --chunk-words --max-tokens
   --temperature --max-retries --cleanup --verbose --help --help-all
   --think --testing --ignore-processed --transcript-verbose
-  --litellm-proxy --litellm-model --litellm-key
-  --omniroute --omniroute-model --omniroute-key
   --overlap-percent
 )
 

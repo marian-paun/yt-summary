@@ -7,7 +7,6 @@ set -euo pipefail
 : "${OLLAMA_NUM_CTX:=24000}"
 : "${MAX_TOKENS:=100000}"
 : "${TEMPERATURE:=0.1}"
-: "${USE_LITELLM:=false}"
 : "${LITELLM_PROXY_URL:=}"
 : "${LITELLM_MODEL:=}"
 : "${LITELLM_API_KEY:=}"
@@ -441,12 +440,6 @@ ollama_chat() {
   local system="$2"
   local user="$3"
   local think="${4:-false}"
-
-  # If using LiteLLM, delegate to LiteLLM
-  if [[ "$USE_LITELLM" == "true" ]]; then
-    litellm_chat "$model" "$system" "$user" "$think"
-    return $?
-  fi
 
   local model_name="${model#ollama/}"
 
