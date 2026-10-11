@@ -110,7 +110,8 @@ AUDIO (TTS) OPTIONS:
   --voice VOICE              Explicit voice name (overrides language selection);
                                for piper also accepts a filename in VOICES_DIR or a path to a .onnx file
   --tts-engine ENGINE        TTS engine: piper or edge-tts (default: ${TTS_ENGINE});
-                               edge-tts falls back to piper when it cannot reach the service
+                               edge-tts tries a direct connection, then EDGE_TTS_PROXY1..3,
+                               then falls back to piper, then sends the summary via Telegram
   --no-phonetic              Disable phonetic rewrite of foreign words before TTS (default: enabled)
 
 TRANSCRIPTION FALLBACK (WHISPER) OPTIONS:
@@ -312,12 +313,20 @@ EOF
   --- TTS / audio ---
 EOF
   env_entry TTS_ENGINE "$(env_show TTS_ENGINE)" \
-    "TTS engine: piper | edge-tts (edge-tts falls back to piper on failure)" \
+    "TTS engine: piper | edge-tts (edge-tts tries direct, proxies, piper, then Telegram)" \
     "CLI: --tts-engine ENGINE"
   env_entry PIPER_BIN "$(env_show PIPER_BIN)" \
     "piper executable: name resolved on PATH, or a full path"
   env_entry EDGE_TTS_BIN "$(env_show EDGE_TTS_BIN)" \
     "edge-tts executable: name resolved on PATH, or a full path"
+  env_entry EDGE_TTS_TIMEOUT "$(env_show EDGE_TTS_TIMEOUT)" \
+    "Seconds to wait for a single edge-tts attempt before treating it as failed"
+  env_entry EDGE_TTS_PROXY1 "$(env_show_secret EDGE_TTS_PROXY1)" \
+    "Proxy #1 used when edge-tts cannot connect directly (socks5:// or http://)"
+  env_entry EDGE_TTS_PROXY2 "$(env_show_secret EDGE_TTS_PROXY2)" \
+    "Proxy #2 tried after proxy #1 fails"
+  env_entry EDGE_TTS_PROXY3 "$(env_show_secret EDGE_TTS_PROXY3)" \
+    "Proxy #3 tried after proxy #2 fails"
   env_entry AUDIO_FORMAT "$(env_show AUDIO_FORMAT)" \
     "Audio output format: m4a | mp3" "CLI: --audio-format FORMAT"
   env_entry AUDIO_VOICE "$(env_show AUDIO_VOICE)" \

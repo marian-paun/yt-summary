@@ -257,6 +257,10 @@ fi
 : "${TTS_ENGINE:=piper}"              # TTS engine: piper or edge-tts
 : "${PIPER_BIN:=piper}"                # piper binary name or path
 : "${EDGE_TTS_BIN:=edge-tts}"          # edge-tts binary name or path
+: "${EDGE_TTS_TIMEOUT:=30}"            # timeout (s) for a single edge-tts attempt
+: "${EDGE_TTS_PROXY1:=}"               # proxy #1 for edge-tts fallback
+: "${EDGE_TTS_PROXY2:=}"               # proxy #2 for edge-tts fallback
+: "${EDGE_TTS_PROXY3:=}"               # proxy #3 for edge-tts fallback
 : "${PHONETIC_TTS:=true}"              # Enable phonetic rewrite before TTS
 : "${TELEGRAM_BOT_TOKEN:=}"
 : "${TELEGRAM_CHAT_ID:=}"
@@ -1730,7 +1734,18 @@ handle_output() {
     local tts_text
     tts_text=$(prepare_tts_text "$output")
     tts_text=$(phoneticize_for_tts "$tts_text" "$TARGET_LANGUAGE")
-    generate_audio "$tts_text" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"
+    if ! generate_audio "$tts_text" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"; then
+      # TTS exhausted every backend (edge-tts direct, proxies, piper).
+      # Deliver the summary text as a Telegram message instead of losing it.
+      log_warn "Audio generation failed on all engines; sending summary via Telegram"
+      if [[ -n "$TELEGRAM_CHAT_ID" ]]; then
+        local esc_output
+        esc_output=$(printf '%s' "$output" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+        send_telegram_long "$TELEGRAM_CHAT_ID" "$esc_output"
+      else
+        log_warn "Telegram not sent: TELEGRAM_CHAT_ID not configured"
+      fi
+    fi
     declare -f stats_toc >/dev/null 2>&1 && stats_toc "tts" || true
 
     # Embed the video thumbnail in the audio file when one is available.
@@ -1812,6 +1827,45 @@ send_telegram() {
   else
     log_warn "Failed to send Telegram message: $response"
   fi
+}
+
+# Send a long text as one or more Telegram messages, splitting on line
+# boundaries to stay under Telegram's 4096-character message limit.
+send_telegram_long() {
+  local chat_id="$1"
+  local text="$2"
+  local max_len="${3:-3500}"
+
+  if [[ ${#text} -le $max_len ]]; then
+    send_telegram "$chat_id" "$text"
+    return $?
+  fi
+
+  local chunk=""
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ -n "$chunk" ]] && [[ $((${#chunk} + ${#line} + 1)) -gt $max_len ]]; then
+      send_telegram "$chat_id" "$chunk"
+      chunk=""
+    fi
+    # A single line longer than the limit must be hard-split.
+    while [[ ${#line} -gt $max_len ]]; do
+      if [[ -n "$chunk" ]]; then
+        send_telegram "$chat_id" "$chunk"
+        chunk=""
+      fi
+      send_telegram "$chat_id" "${line:0:$max_len}"
+      line="${line:$max_len}"
+    done
+    if [[ -n "$chunk" ]]; then
+      chunk="${chunk}"$'\n'"${line}"
+    else
+      chunk="$line"
+    fi
+  done <<< "$text"
+
+  [[ -n "$chunk" ]] && send_telegram "$chat_id" "$chunk"
+  return 0
 }
 
 send_mqtt() {
