@@ -227,11 +227,9 @@ fi
 : "${LLM_MODEL:=}"
 : "${LLM_URL:=}"
 : "${LLM_API_KEY:=}"
-: "${USE_LITELLM:=false}"             # Deprecated: use LLM_BACKEND instead
 : "${LITELLM_PROXY_URL:=}"
 : "${LITELLM_MODEL:=}"
 : "${LITELLM_API_KEY:=}"
-: "${USE_OMNIROUTE:=false}"           # Deprecated: use LLM_BACKEND instead
 : "${OMNIROUTE_URL:=}"
 : "${OMNIROUTE_MODEL:=}"
 : "${OMNIROUTE_API_KEY:=}"
@@ -257,6 +255,10 @@ fi
 : "${TTS_ENGINE:=piper}"              # TTS engine: piper or edge-tts
 : "${PIPER_BIN:=piper}"                # piper binary name or path
 : "${EDGE_TTS_BIN:=edge-tts}"          # edge-tts binary name or path
+: "${EDGE_TTS_TIMEOUT:=30}"            # timeout (s) for a single edge-tts attempt
+: "${EDGE_TTS_PROXY1:=}"               # proxy #1 for edge-tts fallback
+: "${EDGE_TTS_PROXY2:=}"               # proxy #2 for edge-tts fallback
+: "${EDGE_TTS_PROXY3:=}"               # proxy #3 for edge-tts fallback
 : "${PHONETIC_TTS:=true}"              # Enable phonetic rewrite before TTS
 : "${TELEGRAM_BOT_TOKEN:=}"
 : "${TELEGRAM_CHAT_ID:=}"
@@ -324,8 +326,6 @@ IGNORE_PROCESSED=false
 
 # Track which backend-specific CLI options were explicitly passed
 CLI_OPT_OLLAMA=""
-CLI_OPT_LITELLM=""
-CLI_OPT_OMNIROUTE=""
 
 # Help/usage output (synopsis, options, advanced, .env reference)
 source "${LIB_DIR}/help.sh"
@@ -348,6 +348,11 @@ log_warn() {
 
 log_error() {
   echo "[ERROR] $*" | systemd-cat -p 4 -t yt-summary
+}
+
+# Escape a string for Telegram's HTML parse mode.
+html_escape() {
+  printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
 }
 
 # Help output (synopsis / options / advanced / .env reference) lives in
@@ -395,7 +400,7 @@ parse_args() {
   # Collect arguments, separate options from positional
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -m|--model|--host|--num-ctx|--url|--proxy|--api-key|--key|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|--litellm-proxy|--litellm-model|--litellm-key|--omniroute|--omniroute-model|--omniroute-key|-l|--language|--backend|--whisper-host|--whisper-model|--whisper-ssh-user|--whisper-ssh-auth|--whisper-ssh-key|--whisper-ssh-password|--whisper-transfer|--whisper-remote-dir|--whisper-shared-dir|--overlap-percent)
+      -m|--model|--host|--num-ctx|--url|--proxy|--api-key|--key|--chunk-words|--max-tokens|--temperature|--max-retries|--length|-e|--email|--from|--audio-output|--audio-format|--voice|--tts-engine|--max-playlist-videos|--max-playlist-video-age-days|-l|--language|--backend|--whisper-host|--whisper-model|--whisper-ssh-user|--whisper-ssh-auth|--whisper-ssh-key|--whisper-ssh-password|--whisper-transfer|--whisper-remote-dir|--whisper-shared-dir|--overlap-percent)
         if [[ $# -lt 2 || -z "${2:-}" || "$2" == -* ]]; then
           usage_error "option '$1' requires a value"
           exit 1
@@ -604,7 +609,6 @@ parse_args() {
           case "$2" in
             ollama|litellm|omniroute|fallback)
                 LLM_BACKEND="$2"
-                LLM_BACKEND_FROM_CLI="true"
                 ;;
             *)
                 usage_error "invalid value '$2' for '$1'" \
@@ -612,40 +616,6 @@ parse_args() {
                 exit 1
                 ;;
             esac
-            shift 2
-            ;;
-        --litellm-proxy)
-            USE_LITELLM=true
-            LLM_BACKEND="litellm"
-            LITELLM_PROXY_URL="$2"
-            CLI_OPT_LITELLM="true"
-            shift 2
-            ;;
-        --litellm-model)
-            LITELLM_MODEL="$2"
-            CLI_OPT_LITELLM="true"
-            shift 2
-            ;;
-        --litellm-key)
-            LITELLM_API_KEY="$2"
-            CLI_OPT_LITELLM="true"
-            shift 2
-            ;;
-        --omniroute)
-            USE_OMNIROUTE=true
-            LLM_BACKEND="omniroute"
-            OMNIROUTE_URL="$2"
-            CLI_OPT_OMNIROUTE="true"
-            shift 2
-            ;;
-        --omniroute-model)
-            OMNIROUTE_MODEL="$2"
-            CLI_OPT_OMNIROUTE="true"
-            shift 2
-            ;;
-        --omniroute-key)
-            OMNIROUTE_API_KEY="$2"
-            CLI_OPT_OMNIROUTE="true"
             shift 2
             ;;
         --whisper-host)
@@ -1518,7 +1488,7 @@ summarize_video() {
 
   if [[ "$SEND_TELEGRAM" == "true" ]]; then
     local esc_title
-    esc_title=$(printf '%s' "$title" | sed 's/&/\&/g; s/</\</g; s/>/\>/g')
+    esc_title=$(html_escape "$title")
     local telegram_body
     # Only the title is wrapped: the statistics block is pre-formatted for
     # a 29-column <pre> block, so folding it would break its alignment.
@@ -1730,7 +1700,18 @@ handle_output() {
     local tts_text
     tts_text=$(prepare_tts_text "$output")
     tts_text=$(phoneticize_for_tts "$tts_text" "$TARGET_LANGUAGE")
-    generate_audio "$tts_text" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"
+    if ! generate_audio "$tts_text" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"; then
+      # TTS exhausted every backend (edge-tts direct, proxies, piper).
+      # Deliver the summary text as a Telegram message instead of losing it.
+      log_warn "Audio generation failed on all engines; sending summary via Telegram"
+      if [[ -n "$TELEGRAM_CHAT_ID" ]]; then
+        local esc_output
+        esc_output=$(html_escape "$output")
+        send_telegram_long "$TELEGRAM_CHAT_ID" "$esc_output"
+      else
+        log_warn "Telegram not sent: TELEGRAM_CHAT_ID not configured"
+      fi
+    fi
     declare -f stats_toc >/dev/null 2>&1 && stats_toc "tts" || true
 
     # Embed the video thumbnail in the audio file when one is available.
@@ -1812,6 +1793,45 @@ send_telegram() {
   else
     log_warn "Failed to send Telegram message: $response"
   fi
+}
+
+# Send a long text as one or more Telegram messages, splitting on line
+# boundaries to stay under Telegram's 4096-character message limit.
+send_telegram_long() {
+  local chat_id="$1"
+  local text="$2"
+  local max_len="${3:-3500}"
+
+  if [[ ${#text} -le $max_len ]]; then
+    send_telegram "$chat_id" "$text"
+    return $?
+  fi
+
+  local chunk=""
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ -n "$chunk" ]] && [[ $((${#chunk} + ${#line} + 1)) -gt $max_len ]]; then
+      send_telegram "$chat_id" "$chunk"
+      chunk=""
+    fi
+    # A single line longer than the limit must be hard-split.
+    while [[ ${#line} -gt $max_len ]]; do
+      if [[ -n "$chunk" ]]; then
+        send_telegram "$chat_id" "$chunk"
+        chunk=""
+      fi
+      send_telegram "$chat_id" "${line:0:$max_len}"
+      line="${line:$max_len}"
+    done
+    if [[ -n "$chunk" ]]; then
+      chunk="${chunk}"$'\n'"${line}"
+    else
+      chunk="$line"
+    fi
+  done <<< "$text"
+
+  [[ -n "$chunk" ]] && send_telegram "$chat_id" "$chunk"
+  return 0
 }
 
 send_mqtt() {
@@ -1898,6 +1918,8 @@ video_id_exists_in_external_file() {
   local video_id="$1"
   local external_file="${EXTERNAL_TRACKING_FILE}"
 
+  [[ -z "$external_file" ]] && return 1
+
   # Create directory if it doesn't exist
   mkdir -p "$(dirname "$external_file")"
   touch "$external_file"
@@ -1919,6 +1941,8 @@ video_id_exists_in_external_file() {
 add_video_id_to_external_file() {
   local video_id="$1"
   local external_file="${EXTERNAL_TRACKING_FILE}"
+
+  [[ -z "$external_file" ]] && return 0
 
   # Create directory if it doesn't exist
   mkdir -p "$(dirname "$external_file")"
@@ -1955,12 +1979,6 @@ validate_backend_options() {
   if [[ "$backend" != "ollama" && "$CLI_OPT_OLLAMA" == "true" ]]; then
     log_warn "Ollama-specific options (--model/--host/--num-ctx) ignored: backend is '${backend}'"
   fi
-  if [[ "$backend" != "litellm" && "$CLI_OPT_LITELLM" == "true" ]]; then
-    log_warn "LiteLLM-specific options (--litellm-proxy/--litellm-model/--litellm-key) ignored: backend is '${backend}'"
-  fi
-  if [[ "$backend" != "omniroute" && "$CLI_OPT_OMNIROUTE" == "true" ]]; then
-    log_warn "Omniroute-specific options (--omniroute/--omniroute-model/--omniroute-key) ignored: backend is '${backend}'"
-  fi
 }
 
 main() {
@@ -1988,24 +2006,13 @@ main() {
   fi
   export OLLAMA_MODEL OLLAMA_NUM_CTX MAX_TOKENS TEMPERATURE MAX_RETRIES
   export LLM_BACKEND
-  export USE_LITELLM LITELLM_PROXY_URL LITELLM_MODEL LITELLM_API_KEY
-  export USE_OMNIROUTE OMNIROUTE_URL OMNIROUTE_MODEL OMNIROUTE_API_KEY
+  export LITELLM_PROXY_URL LITELLM_MODEL LITELLM_API_KEY
+  export OMNIROUTE_URL OMNIROUTE_MODEL OMNIROUTE_API_KEY
   export TRANSCRIPT_VERBOSE
 
   source "${LIB_DIR}/ollama.sh"
   source "${LIB_DIR}/omniroute.sh"
   init_stats
-
-  # Backward compatibility: if legacy USE_* flags are set via env but --backend
-  # was not passed, derive LLM_BACKEND from them. --backend takes precedence
-  # because parse_args sets LLM_BACKEND directly only when --backend is given.
-  if [[ -z "${LLM_BACKEND_FROM_CLI:-}" ]]; then
-    if [[ "$USE_OMNIROUTE" == "true" ]]; then
-      LLM_BACKEND="omniroute"
-    elif [[ "$USE_LITELLM" == "true" ]]; then
-      LLM_BACKEND="litellm"
-    fi
-  fi
 
   # Resolve unified LLM parameters to backend-specific variables if set
   if [[ -n "$LLM_URL" ]]; then
@@ -2041,6 +2048,10 @@ main() {
     }
   elif [[ "$LLM_BACKEND" == "litellm" ]]; then
     log_info "Using LiteLLM backend: $LITELLM_PROXY_URL with model: $LLM_MODEL"
+
+    ollama_chat() {
+      litellm_chat "$@"
+    }
   elif [[ "$LLM_BACKEND" == "fallback" ]]; then
     log_info "Using Fallback backend: Omniroute -> Ollama Cloud -> Ollama Local"
     source "${LIB_DIR}/fallback.sh"

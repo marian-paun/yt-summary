@@ -110,7 +110,8 @@ AUDIO (TTS) OPTIONS:
   --voice VOICE              Explicit voice name (overrides language selection);
                                for piper also accepts a filename in VOICES_DIR or a path to a .onnx file
   --tts-engine ENGINE        TTS engine: piper or edge-tts (default: ${TTS_ENGINE});
-                               edge-tts falls back to piper when it cannot reach the service
+                               edge-tts tries a direct connection, then EDGE_TTS_PROXY1..3,
+                               then falls back to piper, then sends the summary via Telegram
   --no-phonetic              Disable phonetic rewrite of foreign words before TTS (default: enabled)
 
 TRANSCRIPTION FALLBACK (WHISPER) OPTIONS:
@@ -152,20 +153,14 @@ usage_advanced() {
 ADVANCED & LEGACY OPTIONS:
   --think                    Enable think/reasoning mode (Ollama, Omniroute, LiteLLM, Fallback)
   --chunk-words WORDS        Target words per chunk (default: ${CHUNK_WORDS}; disables auto chunk size)
-  --auto-chunk               Ask the LLM for the recommended chunk size before summarizing
-                             (default: ${AUTO_CHUNK})
+  --no-auto-chunk            Use the configured CHUNK_WORDS and skip the LLM chunk-size
+                             recommendation (auto chunk size is on by default)
   --max-tokens TOKENS        Max tokens per response (default: ${MAX_TOKENS})
   --temperature TEMP         Temperature for LLM (default: ${TEMPERATURE})
   --max-retries RETRIES      Max retries per LLM call (default: ${MAX_RETRIES})
   --testing                  Testing mode: generate output without caching or stats
   --ignore-processed         Skip videos that have already been processed
   --transcript-verbose       Show transcript fetching details
-  --litellm-proxy URL        [Deprecated] Alias for --backend litellm --url URL
-  --litellm-model MODEL      [Deprecated] Alias for --backend litellm --model MODEL
-  --litellm-key KEY          [Deprecated] Alias for --backend litellm --api-key KEY
-  --omniroute URL            [Deprecated] Alias for --backend omniroute --url URL
-  --omniroute-model MODEL    [Deprecated] Alias for --backend omniroute --model MODEL
-  --omniroute-key KEY        [Deprecated] Alias for --backend omniroute --api-key KEY
 EOF
 }
 
@@ -194,10 +189,6 @@ EOF
   env_entry LLM_API_KEY "$(env_show_secret LLM_API_KEY)" \
     "Unified API key applied to the selected backend (litellm/omniroute)" \
     "CLI: --api-key, --key KEY"
-  env_entry USE_LITELLM "$(env_show USE_LITELLM)" \
-    "[Deprecated] true selects the litellm backend; use LLM_BACKEND instead"
-  env_entry USE_OMNIROUTE "$(env_show USE_OMNIROUTE)" \
-    "[Deprecated] true selects the omniroute backend; use LLM_BACKEND instead"
 
   cat <<EOF
 
@@ -312,12 +303,20 @@ EOF
   --- TTS / audio ---
 EOF
   env_entry TTS_ENGINE "$(env_show TTS_ENGINE)" \
-    "TTS engine: piper | edge-tts (edge-tts falls back to piper on failure)" \
+    "TTS engine: piper | edge-tts (edge-tts tries direct, proxies, piper, then Telegram)" \
     "CLI: --tts-engine ENGINE"
   env_entry PIPER_BIN "$(env_show PIPER_BIN)" \
     "piper executable: name resolved on PATH, or a full path"
   env_entry EDGE_TTS_BIN "$(env_show EDGE_TTS_BIN)" \
     "edge-tts executable: name resolved on PATH, or a full path"
+  env_entry EDGE_TTS_TIMEOUT "$(env_show EDGE_TTS_TIMEOUT)" \
+    "Seconds to wait for a single edge-tts attempt before treating it as failed"
+  env_entry EDGE_TTS_PROXY1 "$(env_show_secret EDGE_TTS_PROXY1)" \
+    "Proxy #1 used when edge-tts cannot connect directly (socks5:// or http://)"
+  env_entry EDGE_TTS_PROXY2 "$(env_show_secret EDGE_TTS_PROXY2)" \
+    "Proxy #2 tried after proxy #1 fails"
+  env_entry EDGE_TTS_PROXY3 "$(env_show_secret EDGE_TTS_PROXY3)" \
+    "Proxy #3 tried after proxy #2 fails"
   env_entry AUDIO_FORMAT "$(env_show AUDIO_FORMAT)" \
     "Audio output format: m4a | mp3" "CLI: --audio-format FORMAT"
   env_entry AUDIO_VOICE "$(env_show AUDIO_VOICE)" \
@@ -439,11 +438,9 @@ KNOWN_LONG_OPTIONS=(
   --whisper-ssh-auth --whisper-ssh-key --whisper-ssh-password
   --whisper-transfer --whisper-remote-dir --whisper-shared-dir
   --max-playlist-videos --max-playlist-video-age-days
-  --force --no-auto-chunk --auto-chunk --chunk-words --max-tokens
+  --force --no-auto-chunk --chunk-words --max-tokens
   --temperature --max-retries --cleanup --verbose --help --help-all
   --think --testing --ignore-processed --transcript-verbose
-  --litellm-proxy --litellm-model --litellm-key
-  --omniroute --omniroute-model --omniroute-key
   --overlap-percent
 )
 

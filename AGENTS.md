@@ -5,7 +5,7 @@
 ```bash
 ./yt-summary "https://youtube.com/watch?v=VIDEO_ID"
 ./yt-summary --help
-./yt-summary --help-all   # advanced/legacy options + every .env variable
+./yt-summary --help-all   # advanced options + every .env variable
 ```
 
 Invocation errors (no target, unknown option, option missing its value) print a
@@ -27,10 +27,10 @@ short synopsis on stderr and exit 1 - not the full help.
 
 ## Architecture
 
-- **Entry point**: `./yt-summary` (1329 lines) — main orchestrator, CLI parsing, pipeline coordination, output formatting
+- **Entry point**: `./yt-summary` (~2080 lines) — main orchestrator, CLI parsing, pipeline coordination, output formatting
 - **Libraries** (sourced by the entry point):
   - `lib/ollama.sh` — LLM API wrappers & session statistics
-    - `ollama_chat()` — primary LLM call (Ollama native API); also delegates to `litellm_chat()` when `USE_LITELLM=true`
+    - `ollama_chat()` — primary LLM call (Ollama native API); `main()` overrides it to delegate to `litellm_chat()` when `LLM_BACKEND=litellm` (and to `omniroute_chat()`/`fallback_chat()` for those backends)
     - `litellm_chat()` — LiteLLM proxy (OpenAI-compatible) chat completion
     - Statistics: `_init_stats()`, `_update_stats()`, `update_video_stats()`, `stats_snapshot()`, `stats_tic()/toc()`, `show_stats()`, `format_stats_markdown()`
     - Model checks: `ollama_check()`, `ollama_model_exists()`
@@ -61,10 +61,10 @@ short synopsis on stderr and exit 1 - not the full help.
     - `cache_init()`, `cache_get_path()`, `cache_has_summary()`, `cache_has_key_points()`, `cache_is_complete()`
     - `cache_write_with_checksum()`, `cache_read()`, `cache_read_with_checksum()`, `cache_checksum()`
   - `lib/tts.sh` — Text-to-speech (Piper / edge-tts)
-    - `generate_audio()` — dispatcher: strips markdown via `prepare_tts_text()` then calls engine
+    - `generate_audio()` — dispatcher: strips markdown via `prepare_tts_text()` then calls engine. For `edge-tts` the order is: direct connection → `EDGE_TTS_PROXY1..3` / `EDGE_TTS_PROXIES` (only on retryable failures) → piper (default voice) → return 1 so the caller can send the summary via Telegram
     - `prepare_tts_text()` — removes headers, bullets, blank lines
     - `generate_audio_piper()` — Piper TTS → WAV → ffmpeg → m4a/mp3
-    - `generate_audio_edge_tts()` — edge-tts → mp3 → (optional) ffmpeg → m4a; on failure sets `EDGE_TTS_FAILURE=fallback` for Piper retry
+    - `generate_audio_edge_tts()` — edge-tts → mp3 → (optional) ffmpeg → m4a; accepts an optional proxy argument; guarded by `EDGE_TTS_TIMEOUT`; on failure sets `EDGE_TTS_FAILURE` (`fallback` = retryable network/service error, `fatal` = bad voice/format or local ffmpeg)
     - `generate_audio_with_piper()` — resolves voice path, calls Piper
     - `get_voice_for_language()`, `get_edge_tts_voice()` — voice resolution (defaults per language)
     - `check_voice_exists()`, `resolve_tts_bin()` — validation helpers
@@ -112,12 +112,12 @@ Four backends are supported via `--backend` or `LLM_BACKEND` env var:
 
 | Backend | Description | Options |
 |---------|-------------|---------|
-| `ollama` | local backend | `-m`/`--model`, `--url`/`-h`, `--num-ctx`, `--think` |
+| `ollama` | local backend | `-m`/`--model`, `--url`/`--host`, `--num-ctx`, `--think` |
 | `litellm` | LiteLLM proxy (cloud models) | `--backend litellm`, `-m`/`--model`, `--url`/`--proxy`, `--api-key` |
 | `omniroute` | default Omniroute proxy (model routing) | `--backend omniroute`, `-m`/`--model`, `--url`/`--proxy`, `--api-key` |
 | `fallback` | cascading fallback: Omniroute → Ollama Cloud → Ollama Local | `--backend fallback`, `OLLAMA_CLOUD_API_KEYS`, `OLLAMA_CLOUD_URL`, `OLLAMA_CLOUD_MODEL`, `OLLAMA_LOCAL_MODEL` |
 
-Unified flags (`-m`/`--model`, `--url`/`--proxy`, `--api-key`/`--key`) work across all backends. Legacy backend flags (`--litellm-proxy`, `--omniroute`, `--litellm-model`, etc.) remain supported as backward-compatible aliases.
+Unified flags (`-m`/`--model`, `--url`/`--proxy`, `--api-key`/`--key`) work across all backends.
 
 ### Fallback Backend
 
@@ -145,7 +145,7 @@ Configuration via `.env`:
 | `--telegram` | Send per-video statistics via Telegram (one message after each video) |
 | `--audio` | Generate audio from summary |
 | `--voice VOICE` | Explicit voice name (overrides language detection) |
-| `--tts-engine ENGINE` | TTS engine: `piper` or `edge-tts`. If `edge-tts` cannot deliver the audio (binary missing, connection refused, service unavailable, throttling, crash), it automatically falls back to `piper` using the default voice for the detected language. A bad `--voice` or a local ffmpeg failure is reported instead of falling back. |
+| `--tts-engine ENGINE` | TTS engine: `piper` or `edge-tts`. `edge-tts` tries a direct connection, then `EDGE_TTS_PROXY1..3`, then falls back to `piper` (language default voice); if `piper` also fails, the summary text is sent via Telegram. A bad `--voice` or a local ffmpeg failure aborts with the reported cause instead of falling back. |
 | `--audio-format FORMAT` | Audio format: `m4a` or `mp3` |
 | `--stats` | Show session statistics at end (counts, tokens, and per-video processing durations: YT-dlp extraction → Whisper → LLM duration → TTS → Total) |
 | `--include-stats` | Include per-video statistics in output document (the final `--stats` block stays cumulative for the whole session) |
@@ -170,7 +170,7 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server |
 | `OLLAMA_MODEL` | `gemma2:2b` | Model name |
 | `OLLAMA_NUM_CTX` | `24000` | Ollama context window |
-| `LLM_BACKEND` | `omniroute` | Backend: `ollama`, `litellm`, or `omniroute` |
+| `LLM_BACKEND` | `omniroute` | Backend: `ollama`, `litellm`, `omniroute`, or `fallback` |
 | `LLM_URL` / `LLM_MODEL` / `LLM_API_KEY` | *(empty)* | Unified overrides applied to the selected backend |
 | `CHUNK_WORDS` | `900` | Words per transcript chunk |
 | `AUTO_CHUNK` | `true` | Ask the LLM for the recommended chunk size before summarizing (`false` = always use `CHUNK_WORDS`; an explicit `--chunk-words` flag also disables it) |
@@ -184,17 +184,17 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `PROMPT_SYSTEM_KEYPOINTS` / `PROMPT_USER_KEYPOINTS` | *(defaults)* | Key-points prompts |
 | `PROMPT_SYSTEM_CHUNKSIZE` / `PROMPT_USER_CHUNKSIZE` | *(defaults)* | Chunk-size recommendation prompts (placeholders: `{{INPUT_WORDS}}`, `{{DEFAULT_CHUNK_WORDS}}`) |
 | `CACHE_DIR` | `/tmp/yt-summary-cache` | Where summaries are cached |
-| `USE_LITELLM` | `false` | Deprecated: use `LLM_BACKEND=litellm` |
 | `LITELLM_PROXY_URL` | *(empty)* | LiteLLM proxy URL |
 | `LITELLM_MODEL` | *(empty)* | LiteLLM model name |
 | `LITELLM_API_KEY` | *(empty)* | LiteLLM API key |
-| `USE_OMNIROUTE` | `false` | Deprecated: use `LLM_BACKEND=omniroute` |
 | `OMNIROUTE_URL` | `http://localhost:20128` | Omniroute proxy URL |
 | `OMNIROUTE_MODEL` | *(empty)* | Omniroute model name |
 | `OMNIROUTE_API_KEY` | *(empty)* | Omniroute API key |
 | `TTS_ENGINE` | `piper` | TTS engine: `piper` or `edge-tts` |
 | `PIPER_BIN` | `piper` | Piper binary: name resolved on `PATH`, or a full path |
 | `EDGE_TTS_BIN` | `edge-tts` | edge-tts binary: name resolved on `PATH`, or a full path |
+| `EDGE_TTS_TIMEOUT` | `30` | Seconds to wait for a single edge-tts attempt before treating it as failed |
+| `EDGE_TTS_PROXY1` / `EDGE_TTS_PROXY2` / `EDGE_TTS_PROXY3` | *(empty)* | Proxies tried in order when edge-tts cannot connect directly (`socks5://` or `http://`); `EDGE_TTS_PROXIES` (comma-separated) is also accepted |
 | `AUDIO_FORMAT` | `mp3` | Audio output format |
 | `AUDIO_VOICE` | *(empty)* | Explicit voice name (or, for piper, a path to a `.onnx` file) |
 | `VOICES_DIR` | `/data/configs/voices` | Piper TTS voices directory |
