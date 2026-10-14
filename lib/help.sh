@@ -303,12 +303,14 @@ EOF
   --- TTS / audio ---
 EOF
   env_entry TTS_ENGINE "$(env_show TTS_ENGINE)" \
-    "TTS engine: piper | edge-tts (edge-tts tries direct, proxies, piper, then Telegram)" \
+    "TTS engine: piper | edge-tts (edge-tts tries direct, proxies, gtts-cli, piper, then Telegram)" \
     "CLI: --tts-engine ENGINE"
   env_entry PIPER_BIN "$(env_show PIPER_BIN)" \
     "piper executable: name resolved on PATH, or a full path"
   env_entry EDGE_TTS_BIN "$(env_show EDGE_TTS_BIN)" \
     "edge-tts executable: name resolved on PATH, or a full path"
+  env_entry GTTS_CLI_BIN "$(env_show GTTS_CLI_BIN)" \
+    "gtts-cli executable: name resolved on PATH, or a full path (default: gtts-cli)"
   env_entry EDGE_TTS_TIMEOUT "$(env_show EDGE_TTS_TIMEOUT)" \
     "Seconds to wait for a single edge-tts attempt before treating it as failed"
   env_entry EDGE_TTS_PROXY1 "$(env_show_secret EDGE_TTS_PROXY1)" \

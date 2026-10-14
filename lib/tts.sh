@@ -1,17 +1,18 @@
 #!/bin/bash
-# lib/tts.sh - Text-to-Speech using Piper or edge-tts
+# lib/tts.sh - Text-to-Speech using Piper, edge-tts, or gtts-cli
 
 : "${PIPER_BIN:=piper}"
 : "${EDGE_TTS_BIN:=edge-tts}"
+: "${GTTS_CLI_BIN:=gtts-cli}"
 : "${EDGE_TTS_TIMEOUT:=30}"
 
 # Why the last generate_audio_edge_tts call failed. Empty on success.
 #   "fallback" - edge-tts could not deliver the audio (binary missing, network
 #                or service error, rate limit, crash). Worth retrying locally
-#                with piper.
+#                with gtts-cli or piper.
 #   "fatal"    - the request or the local tooling is at fault (bad voice name,
-#                bad output format, ffmpeg failure). Retrying under piper would
-#                fail the same way and hide the real cause.
+#                bad output format, ffmpeg failure). Retrying under gtts-cli/piper
+#                would fail the same way and hide the real cause.
 EDGE_TTS_FAILURE=""
 
 # Mask credentials in a proxy URL (or free text) for logging.
@@ -244,11 +245,18 @@ generate_audio_edge_tts() {
         return 1
     fi
 
+    # Disable SSL verification when using a proxy (allows self-signed certs on local proxies)
+    # PYTHONHTTPSVERIFY affects stdlib ssl/urllib; AIOHTTP_CLIENT_SSL_VERIFY affects aiohttp
+    local ssl_verify="1"
+    if [[ -n "$proxy" ]] || [[ -n "${EDGE_TTS_PROXY:-}" ]]; then
+        ssl_verify="0"
+    fi
+
     # A non-zero exit here means edge-tts could not deliver the audio: the
     # service refused the connection, was unavailable, throttled the request,
     # or the client crashed. All of these are worth retrying locally.
     # A timeout guards against a hung connection (e.g. a dead proxy).
-    if ! output=$(timeout "$EDGE_TTS_TIMEOUT" "$edge_tts_bin" "${edge_tts_args[@]}" 2>&1); then
+    if ! output=$(PYTHONHTTPSVERIFY="$ssl_verify" AIOHTTP_CLIENT_SSL_VERIFY="$ssl_verify" timeout "$EDGE_TTS_TIMEOUT" "$edge_tts_bin" "${edge_tts_args[@]}" 2>&1); then
         log_error "edge-tts failed to generate audio: $(mask_proxy_credentials "$output")"
         rm -rf "$temp_dir"
         EDGE_TTS_FAILURE="fallback"
@@ -266,6 +274,68 @@ generate_audio_edge_tts() {
             # ffmpeg is local and is also what piper needs, so a retry would
             # fail identically.
             EDGE_TTS_FAILURE="fatal"
+            return 1
+        fi
+    fi
+
+    rm -rf "$temp_dir"
+    log_info "Audio saved to: $output_file"
+    return 0
+}
+
+# Generate audio with gtts-cli (Google Text-to-Speech).
+# gtts-cli outputs MP3 by default; we convert to M4A if needed.
+# Supported languages: see `gtts-cli --all` for the full list.
+# Common language codes: en, ro, es, fr, de, it, pt, ja, ko, zh, ru, ar, hi, etc.
+generate_audio_gtts_cli() {
+    local text="$1"
+    local language="$2"
+    local output_file="$3"
+    local format="${4:-m4a}"
+    local slow="${5:-false}"
+    local output
+
+    case "$format" in
+        m4a|mp3) ;;
+        *)
+            log_error "Invalid audio format: $format (must be: m4a, mp3)"
+            return 1
+            ;;
+    esac
+
+    # Create temporary file for text input
+    local temp_dir="${TMP_BASE}/gtts-cli_$$"
+    mkdir -p "$temp_dir"
+    local input_file="${temp_dir}/input.txt"
+    echo "$text" > "$input_file"
+
+    log_info "Generating audio with gtts-cli using language: $language"
+
+    local gtts_bin
+    if ! gtts_bin=$(resolve_tts_bin "$GTTS_CLI_BIN" "gtts-cli"); then
+        rm -rf "$temp_dir"
+        return 1
+    fi
+
+    # gtts-cli reads from stdin with -f - or from file with -f FILE
+    # Use -f - to read from stdin for reliability with long texts
+    local gtts_args=("--lang" "$language" "--output" "$output_file" "-f" "-")
+    [[ "$slow" == "true" ]] && gtts_args+=("--slow")
+
+    if ! output=$("$gtts_bin" "${gtts_args[@]}" < "$input_file" 2>&1); then
+        log_error "gtts-cli failed to generate audio: $output"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+
+    # gtts-cli outputs MP3 by default, convert if needed for m4a
+    if [[ "$format" == "m4a" ]]; then
+        log_debug "Converting MP3 to M4A..."
+        local temp_mp3="${temp_dir}/temp.mp3"
+        mv "$output_file" "$temp_mp3"
+        if ! ffmpeg -y -i "$temp_mp3" -vn -c:a aac -b:a "192k" "$output_file" 2>&1; then
+            log_error "FFmpeg conversion from MP3 to M4A failed"
+            rm -rf "$temp_dir"
             return 1
         fi
     fi
@@ -380,10 +450,35 @@ generate_audio() {
                 [[ "$EDGE_TTS_FAILURE" != "fallback" ]] && return 1
             done
 
-            # Fall back to piper (default voice for the detected language;
-            # the edge-tts voice name has no piper equivalent).
-            log_warn "edge-tts unavailable, falling back to piper"
+            # 3. Fall back to gtts-cli (Google TTS)
+            log_warn "edge-tts unavailable, falling back to gtts-cli"
             rm -f "$output_file"  # discard any partial output from the failed attempts
+            # Map language code for gtts-cli (it uses ISO 639-1 codes)
+            local gtts_lang="$language"
+            case "$language" in
+                ro) gtts_lang="ro" ;;
+                en) gtts_lang="en" ;;
+                es) gtts_lang="es" ;;
+                fr) gtts_lang="fr" ;;
+                de) gtts_lang="de" ;;
+                it) gtts_lang="it" ;;
+                pt) gtts_lang="pt" ;;
+                ja) gtts_lang="ja" ;;
+                ko) gtts_lang="ko" ;;
+                zh) gtts_lang="zh" ;;
+                ru) gtts_lang="ru" ;;
+                ar) gtts_lang="ar" ;;
+                hi) gtts_lang="hi" ;;
+                *) gtts_lang="en" ;;
+            esac
+            if generate_audio_gtts_cli "$text" "$gtts_lang" "$output_file" "$format"; then
+                return 0
+            fi
+
+            # 4. Fall back to piper (default voice for the detected language;
+            # the edge-tts voice name has no piper equivalent).
+            log_warn "gtts-cli unavailable, falling back to piper"
+            rm -f "$output_file"
             if generate_audio_with_piper "$text" "" "$output_file" "$format" "$language" "$voices_dir"; then
                 return 0
             fi
