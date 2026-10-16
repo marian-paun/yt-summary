@@ -9,9 +9,9 @@
 # Why the last generate_audio_edge_tts call failed. Empty on success.
 #   "fallback" - edge-tts could not deliver the audio (binary missing, network
 #                or service error, rate limit, crash). Worth retrying locally
-#                with gtts-cli or piper.
+#                with piper.
 #   "fatal"    - the request or the local tooling is at fault (bad voice name,
-#                bad output format, ffmpeg failure). Retrying under gtts-cli/piper
+#                bad output format, ffmpeg failure). Retrying under piper
 #                would fail the same way and hide the real cause.
 EDGE_TTS_FAILURE=""
 
@@ -390,10 +390,35 @@ generate_audio() {
             generate_audio_with_piper "$text" "$voice_setting" "$output_file" "$format" "$language" "$voices_dir"
             ;;
         edge-tts)
+            # 1. Try gtts-cli first (Google TTS).
+            # Map language code for gtts-cli (it uses ISO 639-1 codes)
+            local gtts_lang="$language"
+            case "$language" in
+                ro) gtts_lang="ro" ;;
+                en) gtts_lang="en" ;;
+                es) gtts_lang="es" ;;
+                fr) gtts_lang="fr" ;;
+                de) gtts_lang="de" ;;
+                it) gtts_lang="it" ;;
+                pt) gtts_lang="pt" ;;
+                ja) gtts_lang="ja" ;;
+                ko) gtts_lang="ko" ;;
+                zh) gtts_lang="zh" ;;
+                ru) gtts_lang="ru" ;;
+                ar) gtts_lang="ar" ;;
+                hi) gtts_lang="hi" ;;
+                *) gtts_lang="en" ;;
+            esac
+            rm -f "$output_file"
+            if generate_audio_gtts_cli "$text" "$gtts_lang" "$output_file" "$format"; then
+                return 0
+            fi
+            log_warn "gtts-cli unavailable, falling back to edge-tts"
+
+            # 2. edge-tts: resolve the voice, then try a direct connection.
             local voice
             voice=$(get_edge_tts_voice "$language" "$voice_setting") || return 1
 
-            # 1. Try a direct connection first.
             EDGE_TTS_FAILURE=""
             if generate_audio_edge_tts "$text" "$voice" "$output_file" "$format" ""; then
                 return 0
@@ -406,7 +431,7 @@ generate_audio() {
                 return 1
             fi
 
-            # 2. The failure was recoverable (network/service): try the
+            # 3. The failure was recoverable (network/service): try the
             #    configured proxies in sequence.
             local -a proxies_to_try=()
             if [[ -n "${EDGE_TTS_PROXIES:-}" ]]; then
@@ -450,34 +475,9 @@ generate_audio() {
                 [[ "$EDGE_TTS_FAILURE" != "fallback" ]] && return 1
             done
 
-            # 3. Fall back to gtts-cli (Google TTS)
-            log_warn "edge-tts unavailable, falling back to gtts-cli"
-            rm -f "$output_file"  # discard any partial output from the failed attempts
-            # Map language code for gtts-cli (it uses ISO 639-1 codes)
-            local gtts_lang="$language"
-            case "$language" in
-                ro) gtts_lang="ro" ;;
-                en) gtts_lang="en" ;;
-                es) gtts_lang="es" ;;
-                fr) gtts_lang="fr" ;;
-                de) gtts_lang="de" ;;
-                it) gtts_lang="it" ;;
-                pt) gtts_lang="pt" ;;
-                ja) gtts_lang="ja" ;;
-                ko) gtts_lang="ko" ;;
-                zh) gtts_lang="zh" ;;
-                ru) gtts_lang="ru" ;;
-                ar) gtts_lang="ar" ;;
-                hi) gtts_lang="hi" ;;
-                *) gtts_lang="en" ;;
-            esac
-            if generate_audio_gtts_cli "$text" "$gtts_lang" "$output_file" "$format"; then
-                return 0
-            fi
-
             # 4. Fall back to piper (default voice for the detected language;
             # the edge-tts voice name has no piper equivalent).
-            log_warn "gtts-cli unavailable, falling back to piper"
+            log_warn "edge-tts unavailable, falling back to piper"
             rm -f "$output_file"
             if generate_audio_with_piper "$text" "" "$output_file" "$format" "$language" "$voices_dir"; then
                 return 0

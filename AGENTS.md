@@ -60,8 +60,8 @@ short synopsis on stderr and exit 1 - not the full help.
   - `lib/cache.sh` — File-based summary cache with checksum validation
     - `cache_init()`, `cache_get_path()`, `cache_has_summary()`, `cache_has_key_points()`, `cache_is_complete()`
     - `cache_write_with_checksum()`, `cache_read()`, `cache_read_with_checksum()`, `cache_checksum()`
-  - `lib/tts.sh` — Text-to-speech (Piper / edge-tts)
-    - `generate_audio()` — dispatcher: strips markdown via `prepare_tts_text()` then calls engine. For `edge-tts` the order is: direct connection → `EDGE_TTS_PROXY1..3` / `EDGE_TTS_PROXIES` (only on retryable failures) → piper (default voice) → return 1 so the caller can send the summary via Telegram
+  - `lib/tts.sh` — Text-to-speech (Piper / edge-tts / gtts-cli)
+    - `generate_audio()` — dispatcher: strips markdown via `prepare_tts_text()` then calls engine. For `edge-tts` the order is: gtts-cli → edge-tts direct → `EDGE_TTS_PROXY1..3` / `EDGE_TTS_PROXIES` (only on retryable failures) → piper (default voice) → return 1 so the caller can send the summary via Telegram
     - `prepare_tts_text()` — removes headers, bullets, blank lines
     - `generate_audio_piper()` — Piper TTS → WAV → ffmpeg → m4a/mp3
     - `generate_audio_edge_tts()` — edge-tts → mp3 → (optional) ffmpeg → m4a; accepts an optional proxy argument; guarded by `EDGE_TTS_TIMEOUT`; on failure sets `EDGE_TTS_FAILURE` (`fallback` = retryable network/service error, `fatal` = bad voice/format or local ffmpeg)
@@ -77,7 +77,7 @@ short synopsis on stderr and exit 1 - not the full help.
 ## Dependencies
 
 - **Required**: `ollama`, `yt-dlp`, `jq`, `curl`
-- **Optional**: `python3` + `youtube-transcript-api` (fallback transcript fetch; `pip install --user --break-system-packages youtube-transcript-api` — this is the reliable path when YouTube throttles yt-dlp's caption endpoint with HTTP 429), `mail`/`sendmail`/`mutt` (email), `piper-tts` or `edge-tts` (TTS/audio), `ffmpeg` (audio format conversion), `whisper-ctranslate2` (transcription fallback), `sshpass` (SSH password auth), `rsync`/`scp` (audio transfer to a remote whisper host)
+- **Optional**: `python3` + `youtube-transcript-api` (fallback transcript fetch; `pip install --user --break-system-packages youtube-transcript-api` — this is the reliable path when YouTube throttles yt-dlp's caption endpoint with HTTP 429), `mail`/`sendmail`/`mutt` (email), `piper-tts` or `edge-tts` or `gtts-cli` (TTS/audio), `ffmpeg` (audio format conversion), `whisper-ctranslate2` (transcription fallback), `sshpass` (SSH password auth), `rsync`/`scp` (audio transfer to a remote whisper host)
 
 ## Transcription Fallback
 
@@ -145,7 +145,7 @@ Configuration via `.env`:
 | `--telegram` | Send per-video statistics via Telegram (one message after each video) |
 | `--audio` | Generate audio from summary |
 | `--voice VOICE` | Explicit voice name (overrides language detection) |
-| `--tts-engine ENGINE` | TTS engine: `piper` or `edge-tts`. `edge-tts` tries a direct connection, then `EDGE_TTS_PROXY1..3`, then falls back to `piper` (language default voice); if `piper` also fails, the summary text is sent via Telegram. A bad `--voice` or a local ffmpeg failure aborts with the reported cause instead of falling back. |
+| `--tts-engine ENGINE` | TTS engine: `piper` or `edge-tts`. `edge-tts` tries gtts-cli first, then a direct connection, then `EDGE_TTS_PROXY1..3`, then falls back to `piper` (language default voice); if `piper` also fails, the summary text is sent via Telegram. A bad `--voice` or a local ffmpeg failure aborts with the reported cause instead of falling back. |
 | `--audio-format FORMAT` | Audio format: `m4a` or `mp3` |
 | `--stats` | Show session statistics at end (counts, tokens, and per-video processing durations: YT-dlp extraction → Whisper → LLM duration → TTS → Total) |
 | `--include-stats` | Include per-video statistics in output document (the final `--stats` block stays cumulative for the whole session) |

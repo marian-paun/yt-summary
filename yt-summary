@@ -1701,7 +1701,7 @@ handle_output() {
     tts_text=$(prepare_tts_text "$output")
     tts_text=$(phoneticize_for_tts "$tts_text" "$TARGET_LANGUAGE")
     if ! generate_audio "$tts_text" "$voice" "$output_path" "$AUDIO_FORMAT" "$TTS_ENGINE" "$TARGET_LANGUAGE" "$VOICES_DIR"; then
-      # TTS exhausted every backend (edge-tts direct, proxies, piper).
+      # TTS exhausted every backend (gtts-cli, edge-tts direct, proxies, piper).
       # Deliver the summary text as a Telegram message instead of losing it.
       log_warn "Audio generation failed on all engines; sending summary via Telegram"
       if [[ -n "$TELEGRAM_CHAT_ID" ]]; then

@@ -110,8 +110,8 @@ AUDIO (TTS) OPTIONS:
   --voice VOICE              Explicit voice name (overrides language selection);
                                for piper also accepts a filename in VOICES_DIR or a path to a .onnx file
   --tts-engine ENGINE        TTS engine: piper or edge-tts (default: ${TTS_ENGINE});
-                               edge-tts tries a direct connection, then EDGE_TTS_PROXY1..3,
-                               then falls back to piper, then sends the summary via Telegram
+                               gtts-cli is tried first, then edge-tts (direct, then
+                               EDGE_TTS_PROXY1..3), then piper, then Telegram
   --no-phonetic              Disable phonetic rewrite of foreign words before TTS (default: enabled)
 
 TRANSCRIPTION FALLBACK (WHISPER) OPTIONS:
@@ -303,7 +303,7 @@ EOF
   --- TTS / audio ---
 EOF
   env_entry TTS_ENGINE "$(env_show TTS_ENGINE)" \
-    "TTS engine: piper | edge-tts (edge-tts tries direct, proxies, gtts-cli, piper, then Telegram)" \
+    "TTS engine: piper | edge-tts (edge-tts tries gtts-cli, direct, proxies, piper, then Telegram)" \
     "CLI: --tts-engine ENGINE"
   env_entry PIPER_BIN "$(env_show PIPER_BIN)" \
     "piper executable: name resolved on PATH, or a full path"

@@ -181,10 +181,10 @@ PROMPT_EOC
 
 ```bash
 # TTS engine: piper (default) or edge-tts.
-# When edge-tts cannot deliver the audio (binary missing, connection refused,
-# service unavailable, throttling, crash) it automatically falls back to piper
-# using the default voice for the detected language. A bad --voice or a local
-# ffmpeg failure is reported instead of falling back.
+# For edge-tts the fallback chain is: gtts-cli (Google TTS) first, then edge-tts
+# (direct, then any configured proxies), then piper using the default voice for
+# the detected language. A bad --voice or a local ffmpeg failure is reported
+# instead of falling back.
 TTS_ENGINE=piper
 
 # TTS binaries: name resolved on PATH, or a full path to the executable.
@@ -241,6 +241,7 @@ When using Ollama, all processing happens locally—no data leaves your machine.
 - `mail`/`sendmail`/`mutt` (email output)
 - `piper-tts` (local TTS, required for TTS with `TTS_ENGINE=piper`)
 - `edge-tts` (Microsoft cloud TTS, required for TTS with `TTS_ENGINE=edge-tts`)
+- `gtts-cli` (Google TTS, fallback when edge-tts is unavailable)
 - `ffmpeg` (audio format conversion)
 
 ## 🛠️ Development
