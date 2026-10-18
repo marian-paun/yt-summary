@@ -390,32 +390,7 @@ generate_audio() {
             generate_audio_with_piper "$text" "$voice_setting" "$output_file" "$format" "$language" "$voices_dir"
             ;;
         edge-tts)
-            # 1. Try gtts-cli first (Google TTS).
-            # Map language code for gtts-cli (it uses ISO 639-1 codes)
-            local gtts_lang="$language"
-            case "$language" in
-                ro) gtts_lang="ro" ;;
-                en) gtts_lang="en" ;;
-                es) gtts_lang="es" ;;
-                fr) gtts_lang="fr" ;;
-                de) gtts_lang="de" ;;
-                it) gtts_lang="it" ;;
-                pt) gtts_lang="pt" ;;
-                ja) gtts_lang="ja" ;;
-                ko) gtts_lang="ko" ;;
-                zh) gtts_lang="zh" ;;
-                ru) gtts_lang="ru" ;;
-                ar) gtts_lang="ar" ;;
-                hi) gtts_lang="hi" ;;
-                *) gtts_lang="en" ;;
-            esac
-            rm -f "$output_file"
-            if generate_audio_gtts_cli "$text" "$gtts_lang" "$output_file" "$format"; then
-                return 0
-            fi
-            log_warn "gtts-cli unavailable, falling back to edge-tts"
-
-            # 2. edge-tts: resolve the voice, then try a direct connection.
+            # 1. edge-tts: resolve the voice, then try a direct connection.
             local voice
             voice=$(get_edge_tts_voice "$language" "$voice_setting") || return 1
 
@@ -431,7 +406,7 @@ generate_audio() {
                 return 1
             fi
 
-            # 3. The failure was recoverable (network/service): try the
+            # 2. The failure was recoverable (network/service): try the
             #    configured proxies in sequence.
             local -a proxies_to_try=()
             if [[ -n "${EDGE_TTS_PROXIES:-}" ]]; then
@@ -475,9 +450,34 @@ generate_audio() {
                 [[ "$EDGE_TTS_FAILURE" != "fallback" ]] && return 1
             done
 
-            # 4. Fall back to piper (default voice for the detected language;
-            # the edge-tts voice name has no piper equivalent).
-            log_warn "edge-tts unavailable, falling back to piper"
+            log_warn "edge-tts unavailable, falling back to gtts-cli"
+            # 3. Try gtts-cli (Google TTS).
+            # Map language code for gtts-cli (it uses ISO 639-1 codes)
+            local gtts_lang="$language"
+            case "$language" in
+                ro) gtts_lang="ro" ;;
+                en) gtts_lang="en" ;;
+                es) gtts_lang="es" ;;
+                fr) gtts_lang="fr" ;;
+                de) gtts_lang="de" ;;
+                it) gtts_lang="it" ;;
+                pt) gtts_lang="pt" ;;
+                ja) gtts_lang="ja" ;;
+                ko) gtts_lang="ko" ;;
+                zh) gtts_lang="zh" ;;
+                ru) gtts_lang="ru" ;;
+                ar) gtts_lang="ar" ;;
+                hi) gtts_lang="hi" ;;
+                *) gtts_lang="en" ;;
+            esac
+            rm -f "$output_file"
+            if generate_audio_gtts_cli "$text" "$gtts_lang" "$output_file" "$format"; then
+                return 0
+            fi
+
+            log_warn "gtts-cli unavailable, falling back to piper"
+
+            # 4. Try piper (local, faster, but requires model download).
             rm -f "$output_file"
             if generate_audio_with_piper "$text" "" "$output_file" "$format" "$language" "$voices_dir"; then
                 return 0
@@ -485,8 +485,8 @@ generate_audio() {
 
             # Piper failed too. Signal the caller to deliver the text another
             # way (Telegram).
-            EDGE_TTS_FAILURE="fatal"
-            return 1
+            export SEND_TELEGRAM=true # Force Telegram send
+            return 1 # Indicate failure so the caller can send summary via Telegram
             ;;
         *)
             log_error "Invalid TTS engine: $tts_engine (must be: piper, edge-tts)"
