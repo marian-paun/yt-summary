@@ -249,7 +249,7 @@ _whisper_run() {
     local -a lang_flags=("$@")   # optional --language CODE
 
     local -a args=(--model "$WHISPER_MODEL" --task "$task" \
-        --output_format txt --output_dir "$out_dir")
+        --output_format txt --output_dir "$out_dir" "$audio_path")
     if [[ "${#lang_flags[@]}" -gt 0 ]]; then
         args+=( "${lang_flags[@]}" )
     fi
@@ -262,20 +262,21 @@ _whisper_run() {
         whisper_log_info "Running whisper-ctranslate2 locally (task=$task, model=$WHISPER_MODEL)..."
         whisper_log_info "Transcription can take a long time; it will not be aborted unless whisper errors or crashes."
         # No timeout — see req 2.8
-        "$WHISPER_BIN" "${args[@]}" "$audio_path" 2>&1 | while IFS= read -r line; do
+        "$WHISPER_BIN" "${args[@]}" 2>&1 | while IFS= read -r line; do
             whisper_log_debug "whisper: $line"
         done
         return "${PIPESTATUS[0]}"
     else
         # Build a single, properly quoted remote command.
+        # POSIXLY_CORRECT=1 suppresses GNU find warning from whisper-ctranslate2's internal find
         local remote_cmd
-        remote_cmd="$WHISPER_BIN --model $(printf '%q' "$WHISPER_MODEL") --task $(printf '%q' "$task") \
-            --output_format txt --output_dir $(printf '%q' "$out_dir")"
+        remote_cmd="POSIXLY_CORRECT=1 $WHISPER_BIN --model $(printf '%q' "$WHISPER_MODEL") --task $(printf '%q' "$task") \
+            --output_format txt --output_dir $(printf '%q' "$out_dir") $(printf '%q' "$audio_path")"
         local lf
         for lf in "${lang_flags[@]}"; do
             remote_cmd+=" $(printf '%q' "$lf")"
         done
-        remote_cmd+=" $(printf '%q' "$audio_path") 2>&1"
+        remote_cmd+=" 2>&1"
 
         whisper_log_info "Running whisper-ctranslate2 on $WHISPER_HOST (task=$task, model=$WHISPER_MODEL)..."
         whisper_log_info "Transcription can take a long time; it will not be aborted unless whisper errors or crashes."

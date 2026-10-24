@@ -75,6 +75,14 @@ extract_video_id() {
     echo "${BASH_REMATCH[1]}"
   elif [[ "$url" =~ youtu\.be/([^?]+) ]]; then
     echo "${BASH_REMATCH[1]}"
+  elif [[ "$url" =~ youtube\.com/live/([^?&]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "$url" =~ youtube\.com/shorts/([^?&]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "$url" =~ youtube\.com/embed/([^?&]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "$url" =~ youtube\.com/v/([^?&]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
   else
     echo "$url"
   fi
