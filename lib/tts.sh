@@ -5,6 +5,7 @@
 : "${EDGE_TTS_BIN:=edge-tts}"
 : "${GTTS_CLI_BIN:=gtts-cli}"
 : "${EDGE_TTS_TIMEOUT:=30}"
+: "${EDGE_TTS_ATTEMPTS:=3}"
 
 # Why the last generate_audio_edge_tts call failed. Empty on success.
 #   "fallback" - edge-tts could not deliver the audio (binary missing, network
@@ -374,6 +375,42 @@ prepare_tts_text() {
                        | sed -E '/^[[:space:]]*$/d'
 }
 
+# Try a single edge-tts endpoint (direct when proxy is empty, otherwise the
+# given proxy) up to EDGE_TTS_ATTEMPTS times. Returns 0 on the first success.
+# Leaves EDGE_TTS_FAILURE holding the class of the last failure so the caller
+# can decide whether another endpoint is worth trying.
+_edge_tts_try_endpoint() {
+    local text="$1"
+    local voice="$2"
+    local output_file="$3"
+    local format="$4"
+    local proxy="$5"
+
+    local attempts="${EDGE_TTS_ATTEMPTS:-3}"
+    if [[ ! "$attempts" =~ ^[0-9]+$ ]] || (( attempts < 1 )); then
+        attempts=3
+    fi
+
+    local label="direct connection"
+    [[ -n "$proxy" ]] && label="proxy $(mask_proxy_credentials "$proxy")"
+
+    local attempt
+    for (( attempt = 1; attempt <= attempts; attempt++ )); do
+        rm -f "$output_file"  # drop any partial output
+        EDGE_TTS_FAILURE=""
+        if generate_audio_edge_tts "$text" "$voice" "$output_file" "$format" "$proxy"; then
+            return 0
+        fi
+        # A fatal error would fail identically on every attempt and endpoint.
+        [[ "$EDGE_TTS_FAILURE" != "fallback" ]] && return 1
+        if (( attempt < attempts )); then
+            log_warn "edge-tts ${label} failed (attempt ${attempt}/${attempts}); retrying"
+        fi
+    done
+
+    return 1
+}
+
 generate_audio() {
     local text="$1"
     local voice_setting="$2"
@@ -394,8 +431,7 @@ generate_audio() {
             local voice
             voice=$(get_edge_tts_voice "$language" "$voice_setting") || return 1
 
-            EDGE_TTS_FAILURE=""
-            if generate_audio_edge_tts "$text" "$voice" "$output_file" "$format" ""; then
+            if _edge_tts_try_endpoint "$text" "$voice" "$output_file" "$format" ""; then
                 return 0
             fi
 
@@ -416,9 +452,9 @@ generate_audio() {
                     [[ -n "$p" ]] && proxies_to_try+=("$p")
                 done
             fi
-            # Individual proxy variables: EDGE_TTS_PROXY1..3, in order.
+            # Individual proxy variables: EDGE_TTS_PROXY1..4, in order.
             local i var_name proxy_val
-            for i in 1 2 3; do
+            for i in 1 2 3 4; do
                 var_name="EDGE_TTS_PROXY${i}"
                 proxy_val="${!var_name:-}"
                 [[ -n "$proxy_val" ]] && proxies_to_try+=("$proxy_val")
@@ -440,9 +476,7 @@ generate_audio() {
 
             for p in "${tried_proxies[@]}"; do
                 log_info "Trying edge-tts with proxy: $(mask_proxy_credentials "$p")"
-                rm -f "$output_file"  # drop any partial output
-                EDGE_TTS_FAILURE=""
-                if generate_audio_edge_tts "$text" "$voice" "$output_file" "$format" "$p"; then
+                if _edge_tts_try_endpoint "$text" "$voice" "$output_file" "$format" "$p"; then
                     return 0
                 fi
                 # A fatal error through a proxy would fail the same way

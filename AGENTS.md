@@ -61,7 +61,7 @@ short synopsis on stderr and exit 1 - not the full help.
     - `cache_init()`, `cache_get_path()`, `cache_has_summary()`, `cache_has_key_points()`, `cache_is_complete()`
     - `cache_write_with_checksum()`, `cache_read()`, `cache_read_with_checksum()`, `cache_checksum()`
   - `lib/tts.sh` — Text-to-speech (Piper / edge-tts / gtts-cli)
-    - `generate_audio()` — dispatcher: strips markdown via `prepare_tts_text()` then calls engine. For `edge-tts` the order is: gtts-cli → edge-tts direct → `EDGE_TTS_PROXY1..3` / `EDGE_TTS_PROXIES` (only on retryable failures) → piper (default voice) → return 1 so the caller can send the summary via Telegram
+    - `generate_audio()` — dispatcher: strips markdown via `prepare_tts_text()` then calls engine. For `edge-tts` the order is: gtts-cli → edge-tts direct → `EDGE_TTS_PROXY1..4` / `EDGE_TTS_PROXIES` (only on retryable failures) → piper (default voice) → return 1 so the caller can send the summary via Telegram; each endpoint is tried `EDGE_TTS_ATTEMPTS` times (default 3) before moving to the next
     - `prepare_tts_text()` — removes headers, bullets, blank lines
     - `generate_audio_piper()` — Piper TTS → WAV → ffmpeg → m4a/mp3
     - `generate_audio_edge_tts()` — edge-tts → mp3 → (optional) ffmpeg → m4a; accepts an optional proxy argument; guarded by `EDGE_TTS_TIMEOUT`; on failure sets `EDGE_TTS_FAILURE` (`fallback` = retryable network/service error, `fatal` = bad voice/format or local ffmpeg)
@@ -145,7 +145,7 @@ Configuration via `.env`:
 | `--telegram` | Send per-video statistics via Telegram (one message after each video) |
 | `--audio` | Generate audio from summary |
 | `--voice VOICE` | Explicit voice name (overrides language detection) |
-| `--tts-engine ENGINE` | TTS engine: `piper` or `edge-tts`. `edge-tts` tries gtts-cli first, then a direct connection, then `EDGE_TTS_PROXY1..3`, then falls back to `piper` (language default voice); if `piper` also fails, the summary text is sent via Telegram. A bad `--voice` or a local ffmpeg failure aborts with the reported cause instead of falling back. |
+| `--tts-engine ENGINE` | TTS engine: `piper` or `edge-tts`. `edge-tts` tries gtts-cli first, then a direct connection, then `EDGE_TTS_PROXY1..4` (each tried `EDGE_TTS_ATTEMPTS` times, default 3), then falls back to `piper` (language default voice); if `piper` also fails, the summary text is sent via Telegram. A bad `--voice` or a local ffmpeg failure aborts with the reported cause instead of falling back. |
 | `--audio-format FORMAT` | Audio format: `m4a` or `mp3` |
 | `--stats` | Show session statistics at end (counts, tokens, and per-video processing durations: YT-dlp extraction → Whisper → LLM duration → TTS → Total) |
 | `--include-stats` | Include per-video statistics in output document (the final `--stats` block stays cumulative for the whole session) |
@@ -194,7 +194,8 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `PIPER_BIN` | `piper` | Piper binary: name resolved on `PATH`, or a full path |
 | `EDGE_TTS_BIN` | `edge-tts` | edge-tts binary: name resolved on `PATH`, or a full path |
 | `EDGE_TTS_TIMEOUT` | `30` | Seconds to wait for a single edge-tts attempt before treating it as failed |
-| `EDGE_TTS_PROXY1` / `EDGE_TTS_PROXY2` / `EDGE_TTS_PROXY3` | *(empty)* | Proxies tried in order when edge-tts cannot connect directly (`socks5://` or `http://`); `EDGE_TTS_PROXIES` (comma-separated) is also accepted |
+| `EDGE_TTS_ATTEMPTS` | `3` | Tries per edge-tts endpoint (direct + each proxy) before moving to the next |
+| `EDGE_TTS_PROXY1` / `EDGE_TTS_PROXY2` / `EDGE_TTS_PROXY3` / `EDGE_TTS_PROXY4` | *(empty)* | Proxies tried in order when edge-tts cannot connect directly (`socks5://` or `http://`); `EDGE_TTS_PROXIES` (comma-separated) is also accepted |
 | `AUDIO_FORMAT` | `mp3` | Audio output format |
 | `AUDIO_VOICE` | *(empty)* | Explicit voice name (or, for piper, a path to a `.onnx` file) |
 | `VOICES_DIR` | `/data/configs/voices` | Piper TTS voices directory |

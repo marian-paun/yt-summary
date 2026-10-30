@@ -111,7 +111,8 @@ AUDIO (TTS) OPTIONS:
                                for piper also accepts a filename in VOICES_DIR or a path to a .onnx file
   --tts-engine ENGINE        TTS engine: piper or edge-tts (default: ${TTS_ENGINE});
                                gtts-cli is tried first, then edge-tts (direct, then
-                               EDGE_TTS_PROXY1..3), then piper, then Telegram
+                               EDGE_TTS_PROXY1..4, each tried EDGE_TTS_ATTEMPTS
+                               times), then piper, then Telegram
   --no-phonetic              Disable phonetic rewrite of foreign words before TTS (default: enabled)
 
 TRANSCRIPTION FALLBACK (WHISPER) OPTIONS:
@@ -313,12 +314,16 @@ EOF
     "gtts-cli executable: name resolved on PATH, or a full path (default: gtts-cli)"
   env_entry EDGE_TTS_TIMEOUT "$(env_show EDGE_TTS_TIMEOUT)" \
     "Seconds to wait for a single edge-tts attempt before treating it as failed"
+  env_entry EDGE_TTS_ATTEMPTS "$(env_show EDGE_TTS_ATTEMPTS)" \
+    "Tries per edge-tts endpoint (direct + each proxy) before moving to the next"
   env_entry EDGE_TTS_PROXY1 "$(env_show_secret EDGE_TTS_PROXY1)" \
     "Proxy #1 used when edge-tts cannot connect directly (socks5:// or http://)"
   env_entry EDGE_TTS_PROXY2 "$(env_show_secret EDGE_TTS_PROXY2)" \
     "Proxy #2 tried after proxy #1 fails"
   env_entry EDGE_TTS_PROXY3 "$(env_show_secret EDGE_TTS_PROXY3)" \
     "Proxy #3 tried after proxy #2 fails"
+  env_entry EDGE_TTS_PROXY4 "$(env_show_secret EDGE_TTS_PROXY4)" \
+    "Proxy #4 tried after proxy #3 fails"
   env_entry AUDIO_FORMAT "$(env_show AUDIO_FORMAT)" \
     "Audio output format: m4a | mp3" "CLI: --audio-format FORMAT"
   env_entry AUDIO_VOICE "$(env_show AUDIO_VOICE)" \
