@@ -95,104 +95,31 @@ load_env_file() {
 
 load_env_file
 
-# --- Prompt templates (defaults; overridable via PROMPT_*_SYSTEM/USER in .env) ---
-# Placeholders replaced at use time:
+# --- Prompt templates -------------------------------------------------------
+# Prompts are supplied by .env (see .env.example); the script has no built-in
+# prompt text. Placeholders replaced at use time:
 #   {{LANG}}, {{CHUNK_TEXT}}, {{CHUNK_CONTEXT}}, {{MIN_SUMMARY_WORDS}},
 #   {{LENGTH_GUIDANCE}}, {{CHUNK_SUMMARIES}}, {{MIN_BULLETS}},
 #   {{MAX_BULLETS}}, {{FINAL_SUMMARY}}, {{INPUT_WORDS}},
-#   {{DEFAULT_CHUNK_WORDS}}
-PROMPT_SYSTEM_CHUNK_DEFAULT="You are an expert summarizer specializing in video transcripts. Produce clear, accurate summaries that capture the essential information, incliuding sufficient details for a correct understanding of the summarized text. Output plain text only — no markdown, no quotes, no prefixes."
-
-PROMPT_USER_CHUNK_DEFAULT=$(cat <<'PROMPT_EOC'
-Summarize this transcript chunk into a fluent narative.
-
-Guidelines:
-- Focus on key facts, decisions, and takeaways, but include sufficient detail for a clear understanding of the summarized ideas
-- Preserve technical terms and proper nouns exactly
-- Maintain the tone of the summarized text
-- Omit filler words, tangents, and redundant information
-- Omit promotional inserts, advertising, requests for money support, etc
-- Do not repeat yourself
-- You answer to Who, What, When, Where, Why and How to find the most important facts
-Language: {{LANG}}
-
-Transcript: {{CHUNK_TEXT}}
-
-Context: {{CHUNK_CONTEXT}}
-PROMPT_EOC
+#   {{DEFAULT_CHUNK_WORDS}}, {{TEXT}}
+PROMPT_VARS=(
+  PROMPT_SYSTEM_CHUNK PROMPT_USER_CHUNK
+  PROMPT_SYSTEM_AGGREGATE PROMPT_USER_AGGREGATE
+  PROMPT_SYSTEM_KEYPOINTS PROMPT_USER_KEYPOINTS
+  PROMPT_SYSTEM_CHUNKSIZE PROMPT_USER_CHUNKSIZE
+  PROMPT_SYSTEM_PHONETIC PROMPT_USER_PHONETIC
 )
 
-PROMPT_SYSTEM_AGGREGATE_DEFAULT="You are an expert editor who combines partial summaries into a unified, coherent document. Output plain text only — no markdown, no quotes, no prefixes."
-
-PROMPT_USER_AGGREGATE_DEFAULT=$(cat <<'PROMPT_EOA'
-Combine these chunk summaries into one flowing narrative.
-
-Rules:
-- Maintain chronological order
-- Deduplicate overlapping information
-- Adjacent chunks share context at boundaries (the end of chunk N overlaps with the start of chunk N+1); treat overlapping content as a single continuous narrative
-- Resolve contradictions by preferring later chunks
-- Create smooth transitions between topics
-- Preserve all unique facts, numbers, and names
-- Do not repeat the same information more than once
-- Target length: {{MIN_SUMMARY_WORDS}} words minimum
-
-Length guidance: {{LENGTH_GUIDANCE}}
-
-Language: {{LANG}}
-
-Chunk summaries:
-{{CHUNK_SUMMARIES}}
-PROMPT_EOA
-)
-
-PROMPT_SYSTEM_KEYPOINTS_DEFAULT="You are an expert at distilling information into actionable key points. Output only bullet points — no intro, no summary, no closing remarks."
-
-PROMPT_USER_KEYPOINTS_DEFAULT=$(cat <<'PROMPT_EOK'
-Extract {{MIN_BULLETS}}-{{MAX_BULLETS}} key points from this content.
-
-Each key point should:
-- Be a single, self-contained statement
-- Start with a verb or noun (not 'The' or 'This')
-- Be specific and concrete (include numbers, names, dates when available)
-- Stand alone without requiring context
-- Not repeat information from another bullet
-- You answer to Who, What, When, Where, Why and How to find the most important facts
-
-Format: One bullet per line, starting with "- "
-
-Language: {{LANG}}
-
-Summary: {{FINAL_SUMMARY}}
-
-Source material:
-{{CHUNK_SUMMARIES}}
-PROMPT_EOK
-)
-
-PROMPT_SYSTEM_CHUNKSIZE_DEFAULT="I will ask you to perform summarization of video transcripts. If your context window will allow it I will submit the whole text for summarization, if not I will submit in chunks, for a map-reduce summarization. Given the transcript word count, and your context window reply with the recommended number of words you can process. Output ONLY a positive integer — no prose, no units, no explanation. Do not iterate too much, return your best guess."
-
-PROMPT_USER_CHUNKSIZE_DEFAULT=$(cat <<'PROMPT_EOCS'
-Transcript word count: {{INPUT_WORDS}}
-Language: {{LANG}}
-PROMPT_EOCS
-)
-
-PROMPT_SYSTEM_PHONETIC_DEFAULT="You are a text normalization expert. Rewrite the input so it can be read aloud naturally in the target language. Output only the rewritten text. No labels, quotes, or markdown."
-
-PROMPT_USER_PHONETIC_DEFAULT=$(cat <<'PROMPT_EOP'
-Rewrite the following text for TTS in {{LANG}}.
-
-Rules:
-- Keep the same language, wording, order, and sentence breaks. Do not summarize or translate.
-- Find tokens that are not in {{LANG}} (loanwords, product names, acronyms) and replace each with a respelling a {{LANG}} reader would pronounce like the original. Romanian example: API -> ei-pi-ai, checkpoint -> cecpoint.
-- Numbers should not be spelled digit by digit - e.g. 275 should be spelled "two hundreds and seventy five" and not "two seven five" - in the respective {{LANG}}.
-- Spell acronyms letter by letter in the target spelling. Do not invent IPA or SSML.
-- If nothing needs changing, return the text unchanged.
-
-Text: {{TEXT}}
-PROMPT_EOP
-)
+validate_prompt_vars() {
+  local var missing=()
+  for var in "${PROMPT_VARS[@]}"; do
+    [[ -n "${!var:-}" ]] || missing+=("$var")
+  done
+  if (( ${#missing[@]} > 0 )); then
+    cli_error "missing prompt configuration in .env: ${missing[*]}"
+    exit 1
+  fi
+}
 
 # Escape a value for literal use inside ${var//pattern/replacement}.
 # Bash interprets '&' (matched pattern) and backslashes in the replacement;
@@ -724,9 +651,9 @@ summarize_chunk() {
   local lang_instruction
   lang_instruction=$(get_lang_instruction "$language")
 
-  local system_prompt="${PROMPT_SYSTEM_CHUNK:-$PROMPT_SYSTEM_CHUNK_DEFAULT}"
+  local system_prompt="$PROMPT_SYSTEM_CHUNK"
 
-  local user_prompt="${PROMPT_USER_CHUNK:-$PROMPT_USER_CHUNK_DEFAULT}"
+  local user_prompt="$PROMPT_USER_CHUNK"
   user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
   user_prompt="${user_prompt//\{\{CHUNK_TEXT\}\}/$(escape_repl "$chunk_text")}"
   user_prompt="${user_prompt//\{\{CHUNK_CONTEXT\}\}/$(escape_repl "$chunk_context")}"
@@ -801,8 +728,8 @@ phoneticize_for_tts() {
     return 0
   fi
 
-  local system_prompt="${PROMPT_SYSTEM_PHONETIC:-$PROMPT_SYSTEM_PHONETIC_DEFAULT}"
-  local user_prompt="${PROMPT_USER_PHONETIC:-$PROMPT_USER_PHONETIC_DEFAULT}"
+  local system_prompt="$PROMPT_SYSTEM_PHONETIC"
+  local user_prompt="$PROMPT_USER_PHONETIC"
 
   user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$language")}"
   user_prompt="${user_prompt//\{\{TEXT\}\}/$(escape_repl "$text")}"
@@ -876,12 +803,12 @@ aggregate_summary() {
   local lang_instruction
   lang_instruction=$(get_lang_instruction "$language")
 
-  local system_prompt="${PROMPT_SYSTEM_AGGREGATE:-$PROMPT_SYSTEM_AGGREGATE_DEFAULT}"
+  local system_prompt="$PROMPT_SYSTEM_AGGREGATE"
 
   local chunk_summaries
   chunk_summaries=$(cat "$mapped_chunks_ref")
 
-  local user_prompt="${PROMPT_USER_AGGREGATE:-$PROMPT_USER_AGGREGATE_DEFAULT}"
+  local user_prompt="$PROMPT_USER_AGGREGATE"
   user_prompt="${user_prompt//\{\{MIN_SUMMARY_WORDS\}\}/$min_summary_words}"
   user_prompt="${user_prompt//\{\{LENGTH_GUIDANCE\}\}/$(escape_repl "$length_guidance")}"
   user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
@@ -941,12 +868,12 @@ generate_key_points() {
   local lang_instruction
   lang_instruction=$(get_lang_instruction "$language" "key points")
 
-  local system_prompt="${PROMPT_SYSTEM_KEYPOINTS:-$PROMPT_SYSTEM_KEYPOINTS_DEFAULT}"
+  local system_prompt="$PROMPT_SYSTEM_KEYPOINTS"
 
   local chunk_summaries
   chunk_summaries=$(cat "$mapped_chunks_ref")
 
-  local user_prompt="${PROMPT_USER_KEYPOINTS:-$PROMPT_USER_KEYPOINTS_DEFAULT}"
+  local user_prompt="$PROMPT_USER_KEYPOINTS"
   user_prompt="${user_prompt//\{\{MIN_BULLETS\}\}/$min_bullets}"
   user_prompt="${user_prompt//\{\{MAX_BULLETS\}\}/$max_bullets}"
   user_prompt="${user_prompt//\{\{LANG\}\}/$(escape_repl "$lang_instruction")}"
@@ -1004,8 +931,8 @@ recommend_chunk_words() {
   local input_words="$1"
   local default_words="${2:-$CHUNK_WORDS}"
 
-  local system_prompt="${PROMPT_SYSTEM_CHUNKSIZE:-$PROMPT_SYSTEM_CHUNKSIZE_DEFAULT}"
-  local user_prompt="${PROMPT_USER_CHUNKSIZE:-$PROMPT_USER_CHUNKSIZE_DEFAULT}"
+  local system_prompt="$PROMPT_SYSTEM_CHUNKSIZE"
+  local user_prompt="$PROMPT_USER_CHUNKSIZE"
   user_prompt="${user_prompt//\{\{INPUT_WORDS\}\}/$(escape_repl "$input_words")}"
   user_prompt="${user_prompt//\{\{DEFAULT_CHUNK_WORDS\}\}/$(escape_repl "$default_words")}"
 
@@ -1983,6 +1910,8 @@ validate_backend_options() {
 
 main() {
   parse_args "$@"
+
+  validate_prompt_vars
 
   # Normalize TARGET_LANGUAGE to TRANSCRIPT_LANG
   case "$TARGET_LANGUAGE" in

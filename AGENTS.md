@@ -179,10 +179,11 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `MAX_RETRIES` | `5` | LLM retries |
 | `SUMMARY_LENGTH` | `medium` | short/medium/long |
 | `TARGET_LANGUAGE` | `en` | Output language. If set (env/.env/`--language`), it is respected; otherwise per-video audio-language detection applies (Romanian audio → Romanian, otherwise English) |
-| `PROMPT_SYSTEM_CHUNK` / `PROMPT_USER_CHUNK` | *(defaults)* | Chunk-summarization prompts |
-| `PROMPT_SYSTEM_AGGREGATE` / `PROMPT_USER_AGGREGATE` | *(defaults)* | Merge prompts |
-| `PROMPT_SYSTEM_KEYPOINTS` / `PROMPT_USER_KEYPOINTS` | *(defaults)* | Key-points prompts |
-| `PROMPT_SYSTEM_CHUNKSIZE` / `PROMPT_USER_CHUNKSIZE` | *(defaults)* | Chunk-size recommendation prompts (placeholders: `{{INPUT_WORDS}}`, `{{DEFAULT_CHUNK_WORDS}}`) |
+| `PROMPT_SYSTEM_CHUNK` / `PROMPT_USER_CHUNK` | *(required)* | Chunk-summarization prompts (no built-in defaults; must be in `.env`) |
+| `PROMPT_SYSTEM_AGGREGATE` / `PROMPT_USER_AGGREGATE` | *(required)* | Merge prompts (no built-in defaults; must be in `.env`) |
+| `PROMPT_SYSTEM_KEYPOINTS` / `PROMPT_USER_KEYPOINTS` | *(required)* | Key-points prompts (no built-in defaults; must be in `.env`) |
+| `PROMPT_SYSTEM_CHUNKSIZE` / `PROMPT_USER_CHUNKSIZE` | *(required)* | Chunk-size recommendation prompts (placeholders: `{{INPUT_WORDS}}`, `{{DEFAULT_CHUNK_WORDS}}`; must be in `.env`) |
+| `PROMPT_SYSTEM_PHONETIC` / `PROMPT_USER_PHONETIC` | *(required)* | Phonetic rewrite prompts for TTS (placeholders: `{{LANG}}`, `{{TEXT}}`; must be in `.env`) |
 | `CACHE_DIR` | `/tmp/yt-summary-cache` | Where summaries are cached |
 | `LITELLM_PROXY_URL` | *(empty)* | LiteLLM proxy URL |
 | `LITELLM_MODEL` | *(empty)* | LiteLLM model name |
@@ -226,7 +227,7 @@ All variables below can be set in a `.env` file next to the script (loaded safel
 | `WHISPER_SHARED_DIR` | *(empty)* | Shared folder path (transfer=shared) |
 | `WHISPER_REMOTE_DIR` | `/tmp/yt-summary-whisper` | Remote work dir on the whisper host |
 | `WHISPER_BIN` | `whisper-ctranslate2` | whisper binary name/path (local mode) |
-| `PROMPT_SYSTEM_CHUNKSIZE` / `PROMPT_USER_CHUNKSIZE` | *(defaults)* | Chunk-size recommendation prompts |
+| `PROMPT_SYSTEM_CHUNKSIZE` / `PROMPT_USER_CHUNKSIZE` | *(required)* | Chunk-size recommendation prompts (must be in `.env`) |
 
 > [!WARNING]
 > Never add real API keys/tokens to committed files. Keep them in the

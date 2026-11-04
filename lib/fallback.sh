@@ -135,8 +135,11 @@ _ollama_cloud_chat_with_key() {
       reasoning_effort: $reasoning_effort
       }' > "$tmp_dir/request.json"
 
+  local cloud_url="${OLLAMA_CLOUD_URL%/}"
+  [[ "$cloud_url" == */v1 ]] && cloud_url="${cloud_url%/v1}"
+
   local response
-  response=$(curl -s --max-time 300 -X POST "${OLLAMA_CLOUD_URL}/v1/chat/completions" \
+  response=$(curl -s --max-time 300 -X POST "${cloud_url}/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $api_key" \
     -d "@$tmp_dir/request.json")
